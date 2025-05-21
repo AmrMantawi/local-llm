@@ -1,0 +1,8 @@
+# Generated files
+/third_party/
+/build/
+
+# IDE / editor settings
+.vscode/
+.idea/
+*.code-workspace

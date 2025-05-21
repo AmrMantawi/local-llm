@@ -1,0 +1,13 @@
+# Local LLM
+
+**Note:** This project is a work in progress.
+
+This repository provides tools and resources for running Large Language Models (LLMs) locally as a chatbot, with integrated Speech-to-Text (STT) and Text-to-Speech (TTS) capabilities. It enables private, offline conversational AI on your own machine.
+
+## Features
+
+- Run LLMs on your local machine
+- Speech-to-Text (STT) and Text-to-Speech (TTS) support
+- Easy setup and configuration
+- Supports multiple model architectures
+
