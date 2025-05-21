@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     std::cout << "Listening... (press Ctrl+C to stop)\n";
 
     // Load Whisper model
-    const std::string model_path = "/home/amr/Desktop/local-llm/third_party/whisper.cpp/models/ggml-small.en.bin";
+    const std::string model_path = "../third_party/whisper.cpp/models/ggml-small.en.bin";
 
     STT stt;
     if (!stt.init(model_path)) {

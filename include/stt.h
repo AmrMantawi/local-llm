@@ -13,7 +13,7 @@ public:
   /// @param pcmf32 input audio.
   /// @param out resulting UTF-8 text.
   /// @return true on success, false on failure.
-  virtual bool ranscribe(const std::vector<float> &pcmf32, std::string &outText) = 0;
+  virtual bool transcribe(const std::vector<float> &pcmf32, std::string &outText) = 0;
 
   /// Release any resources held by STT.
   virtual void shutdown() = 0;
