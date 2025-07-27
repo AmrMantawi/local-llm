@@ -2,6 +2,7 @@
 
 // Abstract interfaces
 #include "stt.h"
+#include "tts.h"
 
 // Whisper-specific headers
 #ifdef USE_WHISPER
@@ -15,6 +16,9 @@
 #include "llm_llama.h"
 #endif
 
+// TTS-specific headers
+#include "tts_piper.cpp"
+
 #include <SDL2/SDL.h>
 #include <iostream>
 #include <vector>
@@ -22,9 +26,10 @@
 #include <csignal>
 #include <atomic>
 
-// Alias the selected backend class to STTBackend
+// Alias the selected backend classes
 using STT = STT_BACKEND;
 using LLM = LLM_BACKEND;
+using TTS = TTS_BACKEND;
 
 // Audio and VAD configuration
 static const int    AUDIO_BUFFER_MS     = 30 * 1000;    // Total buffer size for audio_async 
@@ -45,11 +50,13 @@ static void handle_sigint(int)
 }
 
 int main(int argc, char** argv) {
-    // Check if the that STT_BACKEND and LLM_BACKEND are defined
+    // Check if the that STT_BACKEND, LLM_BACKEND, and TTS_BACKEND are defined
     static_assert(std::is_base_of<ISTT, STT>::value,
                   "STT_BACKEND must be a subclass of ISTT");
     static_assert(std::is_base_of<ILLM, LLM>::value,
                   "LLM_BACKEND must be a subclass of ILLM");
+    static_assert(std::is_base_of<ITTS, TTS>::value,
+                  "TTS_BACKEND must be a subclass of ITTS");
 
     std::signal(SIGINT, handle_sigint);
 
@@ -79,14 +86,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // // Create and initialize LLM backend
+    // Create and initialize LLM backend
     LLM llm;
     if (!llm.init(llama_model_path)) {
         std::cerr << "Failed to initialize LLM backend\n";
         return 1;
     }
 
-    std::cout << "STT backend initialized\n";
+    // Create and initialize TTS backend
+    TTS tts;
+    if (!tts.init()) {
+        std::cerr << "Failed to initialize TTS backend\n";
+        return 1;
+    }
+
+    std::cout << "All backends initialized\n";
 
     // Transcription loop
     std::vector<float> pcmf32;
@@ -109,6 +123,11 @@ int main(int argc, char** argv) {
                 std::string response;
                 if (llm.generate(text, response)) {
                     std::cout << "BMO: " << response << "\n";
+                    
+                    // Speak the response using TTS
+                    if (!tts.speak(response)) {
+                        std::cerr << "TTS failed to speak response\n";
+                    }
                 }
                 else {
                     std::cerr << "LLM generation failed\n";
@@ -122,6 +141,7 @@ int main(int argc, char** argv) {
     // Cleanup
     stt.shutdown();
     llm.shutdown();
+    tts.shutdown();
     audio.pause();
 
     std::cout << "\nProgram Ended\n";

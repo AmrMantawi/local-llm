@@ -43,6 +43,8 @@ bool WhisperSTT::init(const std::string &modelPath) {
       fprintf(stderr, "No whisper.cpp model specified.\n");
       return false;
   }
+
+  std::cout << "STT (Whisper) initialized\n";
   return true;
 }
 

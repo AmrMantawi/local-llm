@@ -2,6 +2,7 @@
 #include "common-sdl.h"
 #include "common.h"
 
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -225,6 +226,8 @@ bool LlamaLLM::init(const std::string &modelPath) {
 
     n_past = n_keep;  // Current position in context
     n_session_consumed = !path_session.empty() && session_tokens.size() > 0 ? session_tokens.size() : 0;
+    
+    std::cout << "LLM (Llama) initialized\n";
 
     return true;
 }
