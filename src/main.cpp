@@ -10,6 +10,11 @@
 #include "stt_whisper.h"
 #endif
 
+// Llama-specific headers
+#ifdef USE_LLAMA
+#include "llm_llama.h"
+#endif
+
 #include <SDL2/SDL.h>
 #include <iostream>
 #include <vector>
@@ -19,6 +24,7 @@
 
 // Alias the selected backend class to STTBackend
 using STT = STT_BACKEND;
+using LLM = LLM_BACKEND;
 
 // Audio and VAD configuration
 static const int    AUDIO_BUFFER_MS     = 30 * 1000;    // Total buffer size for audio_async 
@@ -39,9 +45,11 @@ static void handle_sigint(int)
 }
 
 int main(int argc, char** argv) {
-    // Check if the that the STT_BACKEND is defined correctly
+    // Check if the that STT_BACKEND and LLM_BACKEND are defined
     static_assert(std::is_base_of<ISTT, STT>::value,
                   "STT_BACKEND must be a subclass of ISTT");
+    static_assert(std::is_base_of<ILLM, LLM>::value,
+                  "LLM_BACKEND must be a subclass of ILLM");
 
     std::signal(SIGINT, handle_sigint);
 
@@ -59,12 +67,22 @@ int main(int argc, char** argv) {
     std::cout << "Listening... (press Ctrl+C to stop)\n";
 
     // Load Whisper model
-    const std::string model_path = "../third_party/whisper.cpp/models/ggml-base.en.bin";
+    const std::string whisper_model_path = "../third_party/whisper.cpp/models/ggml-base.en.bin";
+
+    // Load Llama model
+    const std::string llama_model_path = "../models/llm/jan-nano-4b-Q3_K_M.gguf";
 
     // Create and initialize STT backend
     STT stt;
-    if (!stt.init(model_path)) {
+    if (!stt.init(whisper_model_path)) {
         std::cerr << "Failed to initialize STT backend\n";
+        return 1;
+    }
+
+    // // Create and initialize LLM backend
+    LLM llm;
+    if (!llm.init(llama_model_path)) {
+        std::cerr << "Failed to initialize LLM backend\n";
         return 1;
     }
 
@@ -86,6 +104,15 @@ int main(int argc, char** argv) {
             std::string text;
             if (stt.transcribe(pcmf32, text) && !text.empty()) {
                 std::cout << "→ " << text << "\n";
+
+                // Generate response using LLM backend
+                std::string response;
+                if (llm.generate(text, response)) {
+                    std::cout << "BMO: " << response << "\n";
+                }
+                else {
+                    std::cerr << "LLM generation failed\n";
+                }
             }
 
             audio.clear();
@@ -94,6 +121,7 @@ int main(int argc, char** argv) {
 
     // Cleanup
     stt.shutdown();
+    llm.shutdown();
     audio.pause();
 
     std::cout << "\nProgram Ended\n";

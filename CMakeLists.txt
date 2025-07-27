@@ -4,6 +4,8 @@ project(local-llm LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# set(CMAKE_BUILD_TYPE Debug)
+
 # stt, tts, and llm options
 option(USE_WHISPER   "Enable whisper.cpp for STT"   ON)
 option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
@@ -30,7 +32,16 @@ else()
     message(FATAL_ERROR "No STT backend selected")
 endif()
 
+if(USE_LLAMA)
+    add_compile_definitions(LLM_BACKEND=LlamaLLM)
+    add_definitions(-DUSE_LLAMA)
+    list(APPEND SOURCES src/llm_llama.cpp)
+    add_subdirectory(third_party/llama.cpp ${CMAKE_BINARY_DIR}/llama-build EXCLUDE_FROM_ALL)
+    list(APPEND EXTRA_LIBS llama)
+else()
+    message(FATAL_ERROR "No LLM backend selected")
+endif()
 
 add_executable(local-llm ${SOURCES})
 target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(local-llm PRIVATE whisper ${SDL2_LIBRARIES} pthread)
+target_link_libraries(local-llm PRIVATE whisper llama ${SDL2_LIBRARIES} pthread)
