@@ -34,7 +34,7 @@ brew install cmake sdl2 python3
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/amrmantawi/local-llm.git
    cd local-llm
    ```
 
@@ -129,7 +129,7 @@ make -j$(nproc)
 
 ## 📄 License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
