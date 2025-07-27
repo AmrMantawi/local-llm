@@ -1,13 +1,139 @@
 # Local LLM
 
-**Note:** This project is a work in progress.
+A complete local AI assistant with Speech-to-Text (STT), Large Language Model (LLM), and Text-to-Speech (TTS) capabilities. Run entirely on your machine with no cloud dependencies.
 
-This repository provides tools and resources for running Large Language Models (LLMs) locally as a chatbot, with integrated Speech-to-Text (STT) and Text-to-Speech (TTS) capabilities. It enables private, offline conversational AI on your own machine.
+## 🚀 Features
 
-## Features
+- **Speech-to-Text**: Whisper-based transcription
+- **Language Model**: Llama-based text generation
+- **Text-to-Speech**: Piper-based voice synthesis
+- **Voice Activity Detection**: Automatic speech detection
+- **Cross-platform**: Linux, macOS, Windows (WSL)
+- **Privacy-first**: Everything runs locally
 
-- Run LLMs on your local machine
-- Speech-to-Text (STT) and Text-to-Speech (TTS) support
-- Easy setup and configuration
-- Supports multiple model architectures
+## 📋 Requirements
+
+### System Dependencies
+- **CMake** 3.16+
+- **SDL2** development libraries
+- **Python** 3.7+
+- **ALSA** (Linux) or **Core Audio** (macOS)
+
+### Ubuntu/Debian
+```bash
+sudo apt-get update
+sudo apt-get install cmake libsdl2-dev python3 python3-pip python3-venv alsa-utils
+```
+
+### macOS
+```bash
+brew install cmake sdl2 python3
+```
+
+## 🛠️ Quick Setup
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd local-llm
+   ```
+
+2. **Run the setup script:**
+   ```bash
+   chmod +x scripts/setup.sh
+   ./scripts/setup.sh
+   ```
+
+3. **Download models:**
+   - **STT**: Download Whisper models from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp)
+   - **LLM**: Download GGUF models from [Hugging Face](https://huggingface.co/models?search=gguf)
+   - **TTS**: Download Piper models from [Hugging Face](https://huggingface.co/rhasspy/piper-voices)
+
+4. **Place models in the correct directories:**
+   ```
+   models/
+   ├── stt/     # .bin files (Whisper)
+   ├── llm/     # .gguf files (Llama)
+   └── tts/     # .onnx files (Piper)
+   ```
+
+5. **Run the application:**
+   ```bash
+   ./build/local-llm
+   ```
+
+## 🎯 Usage
+
+1. **Start the application** - it will initialize all backends
+2. **Speak into your microphone** - voice activity detection will capture your speech
+3. **Wait for transcription** - Whisper will convert speech to text
+4. **Get AI response** - Llama will generate a response
+5. **Hear the response** - Piper will speak the response back to you
+
+**Controls:**
+- Press `Ctrl+C` to exit gracefully
+
+## 📁 Project Structure
+
+```
+local-llm/
+├── include/           # Header files
+│   ├── stt.h         # STT interface
+│   ├── llm.h         # LLM interface
+│   ├── tts.h         # TTS interface
+│   └── ...           # Implementation headers
+├── src/              # Source files
+│   ├── main.cpp      # Main application
+│   ├── stt_whisper.cpp
+│   ├── llm_llama.cpp
+│   └── tts_piper.cpp
+├── scripts/          # Utility scripts
+│   ├── setup.sh      # Setup script
+│   └── speak         # TTS script
+├── config/           # Configuration files
+│   └── models.json   # Model paths and settings
+├── models/           # Model files (not in git)
+├── third_party/      # External dependencies
+└── build/           # Build artifacts (not in git)
+```
+
+## ⚙️ Configuration
+
+Edit `config/models.json` to customize:
+- Model file paths
+- Audio settings
+- TTS voice settings
+
+## 🔧 Development
+
+### Building from source:
+```bash
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
+
+### Adding new backends:
+1. Create header file in `include/`
+2. Create implementation in `src/`
+3. Add CMake option and conditional compilation
+4. Update main.cpp to include new backend
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+[Add your license here]
+
+## 🙏 Acknowledgments
+
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for STT
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) for LLM
+- [Piper](https://github.com/rhasspy/piper) for TTS
 

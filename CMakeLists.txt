@@ -4,6 +4,28 @@ project(local-llm LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Find nlohmann/json
+find_package(nlohmann_json 3.2.0 QUIET)
+if(NOT nlohmann_json_FOUND)
+    # If not found, try to find it as a header-only library
+    find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
+        PATHS
+        /usr/include
+        /usr/local/include
+        /opt/homebrew/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    )
+    if(NLOHMANN_JSON_INCLUDE_DIR)
+        set(nlohmann_json_INCLUDE_DIRS ${NLOHMANN_JSON_INCLUDE_DIR})
+        set(nlohmann_json_FOUND TRUE)
+    endif()
+endif()
+
+if(NOT nlohmann_json_FOUND)
+    message(WARNING "nlohmann/json not found. Configuration file loading will be disabled.")
+    add_compile_definitions(DISABLE_JSON_CONFIG)
+endif()
+
 # set(CMAKE_BUILD_TYPE Debug)
 
 # stt, tts, and llm options
@@ -42,6 +64,14 @@ else()
     message(FATAL_ERROR "No LLM backend selected")
 endif()
 
+if(USE_Piper)
+    add_compile_definitions(TTS_BACKEND=TTSPiper)
+    add_definitions(-DUSE_Piper)
+    list(APPEND SOURCES src/tts_piper.cpp)
+else()
+    message(FATAL_ERROR "No TTS backend selected")
+endif()
+
 add_executable(local-llm ${SOURCES})
-target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS})
+target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${nlohmann_json_INCLUDE_DIRS})
 target_link_libraries(local-llm PRIVATE whisper llama ${SDL2_LIBRARIES} pthread)

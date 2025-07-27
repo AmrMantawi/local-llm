@@ -1,0 +1,37 @@
+{
+  "models": {
+    "stt": {
+      "whisper": {
+        "path": "../third_party/whisper.cpp/models/ggml-base.en.bin",
+        "type": "whisper",
+        "description": "Whisper base English model for speech-to-text"
+      }
+    },
+    "llm": {
+      "llama": {
+        "path": "../models/llm/jan-nano-4b-Q3_K_M.gguf",
+        "type": "llama",
+        "description": "Jan Nano 4B quantized model for text generation"
+      }
+    },
+    "tts": {
+      "piper": {
+        "path": "../models/tts/en_US-lessac-medium.onnx",
+        "type": "piper",
+        "description": "Piper English voice model for text-to-speech"
+      }
+    }
+  },
+  "settings": {
+    "audio": {
+      "sample_rate": 16000,
+      "buffer_ms": 30000,
+      "vad_threshold": 0.6,
+      "vad_capture_ms": 10000
+    },
+    "tts": {
+      "voice_id": 2,
+      "speak_script": "scripts/speak"
+    }
+  }
+} 

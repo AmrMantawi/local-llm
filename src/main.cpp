@@ -3,6 +3,7 @@
 // Abstract interfaces
 #include "stt.h"
 #include "tts.h"
+#include "config_manager.h"
 
 // Whisper-specific headers
 #ifdef USE_WHISPER
@@ -17,7 +18,9 @@
 #endif
 
 // TTS-specific headers
-#include "tts_piper.cpp"
+#ifdef USE_Piper
+#include "tts_piper.h"
+#endif
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -58,13 +61,19 @@ int main(int argc, char** argv) {
     static_assert(std::is_base_of<ITTS, TTS>::value,
                   "TTS_BACKEND must be a subclass of ITTS");
 
+    // Load configuration
+    auto& config = ConfigManager::getInstance();
+    if (!config.loadConfig("../config/models.json")) {
+        std::cout << "Using default configuration (config file not found or invalid)" << std::endl;
+    }
+
     std::signal(SIGINT, handle_sigint);
 
-    // Initialize audio capture with a 30-second internal buffer
-    audio_async audio(AUDIO_BUFFER_MS);
+    // Initialize audio capture with configurable buffer size
+    audio_async audio(config.getAudioBufferMs());
 
     // Try to open the default microphone
-    if (!audio.init(-1, AUDIO_SAMPLE_RATE)) {
+    if (!audio.init(-1, config.getAudioSampleRate())) {
         std::cerr << "audio.init() failed\n";
         return 1;
     }
@@ -73,11 +82,9 @@ int main(int argc, char** argv) {
     audio.resume();
     std::cout << "Listening... (press Ctrl+C to stop)\n";
 
-    // Load Whisper model
-    const std::string whisper_model_path = "../third_party/whisper.cpp/models/ggml-base.en.bin";
-
-    // Load Llama model
-    const std::string llama_model_path = "../models/llm/jan-nano-4b-Q3_K_M.gguf";
+    // Load models from configuration
+    const std::string whisper_model_path = config.getModelPath("stt", "whisper");
+    const std::string llama_model_path = config.getModelPath("llm", "llama");
 
     // Create and initialize STT backend
     STT stt;
@@ -110,9 +117,9 @@ int main(int argc, char** argv) {
         audio.get(VAD_PRE_WINDOW_MS, pcmf32);  // Fetch latest audio
 
         // Run simple voice activity detection to decide if someone is speaking
-        if (::vad_simple(pcmf32, AUDIO_SAMPLE_RATE, VAD_START_MS, VAD_THRESHOLD, VAD_FREQ_CUTOFF, VAD_PRINT_ENERGY))
+        if (::vad_simple(pcmf32, config.getAudioSampleRate(), VAD_START_MS, config.getVadThreshold(), VAD_FREQ_CUTOFF, VAD_PRINT_ENERGY))
         {
-            audio.get(VAD_CAPTURE_MS, pcmf32);  // Fetch detected speech
+            audio.get(config.getVadCaptureMs(), pcmf32);  // Fetch detected speech
 
             // Transcribe audio using STT backend
             std::string text;
