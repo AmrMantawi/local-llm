@@ -41,6 +41,7 @@ private:
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 class ConfigManager {
 public:
@@ -59,6 +60,9 @@ public:
             
             configFile >> config;
             std::cout << "Configuration loaded from: " << configPath << std::endl;
+            // Remember directory of the configuration to resolve relative model paths
+            std::filesystem::path cfgPath(configPath);
+            configDirectory_ = cfgPath.has_parent_path() ? cfgPath.parent_path().string() : std::string{"."};
             return true;
         } catch (const std::exception& e) {
             std::cerr << "Error loading config: " << e.what() << std::endl;
@@ -68,7 +72,12 @@ public:
     
     std::string getModelPath(const std::string& category, const std::string& type) const {
         try {
-            return config["models"][category][type]["path"].get<std::string>();
+            std::string pathFromConfig = config["models"][category][type]["path"].get<std::string>();
+            std::filesystem::path p(pathFromConfig);
+            if (p.is_relative() && !configDirectory_.empty()) {
+                p = std::filesystem::path(configDirectory_) / p;
+            }
+            return p.string();
         } catch (const std::exception& e) {
             std::cerr << "Error getting model path for " << category << "/" << type << ": " << e.what() << std::endl;
             return "";
@@ -126,5 +135,6 @@ public:
 private:
     ConfigManager() = default;
     nlohmann::json config;
+    std::string configDirectory_;
 };
 #endif 

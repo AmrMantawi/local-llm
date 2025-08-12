@@ -59,7 +59,7 @@ brew install cmake sdl2 python3
 
 5. **Run the application:**
    ```bash
-   ./build/local-llm
+   ./build/local-llm --config /usr/share/local-llm/config/models.json
    ```
 
 ## 🎯 Usage
@@ -99,7 +99,12 @@ local-llm/
 
 ## ⚙️ Configuration
 
+You can pass a custom config with `--config /path/to/models.json`. If omitted, the default is `/usr/share/local-llm/config/models.json`.
+
 Edit `config/models.json` to customize:
+Notes:
+- Relative model paths inside `models.json` are resolved relative to the config file's directory.
+- `--socket /tmp/local-llm.sock` is accepted but currently a no-op (socket mode not implemented yet).
 - Model file paths
 - Audio settings
 - TTS voice settings

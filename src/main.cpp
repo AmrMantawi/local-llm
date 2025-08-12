@@ -28,6 +28,9 @@
 #include <string>
 #include <csignal>
 #include <atomic>
+#include <thread>
+#include <chrono>
+#include "server.h"
 
 // Alias the selected backend classes
 using STT = STT_BACKEND;
@@ -61,86 +64,92 @@ int main(int argc, char** argv) {
     static_assert(std::is_base_of<ITTS, TTS>::value,
                   "TTS_BACKEND must be a subclass of ITTS");
 
+    // CLI flags: --config /path/models.json, --socket /tmp/local-llm.sock (accepted but not implemented)
+    const char* configPath = "/usr/share/local-llm/config/models.json";
+    std::string socketPath = "/run/local-llm.sock";
+    std::string mode = "server"; // default server
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
+            configPath = argv[++i];
+        } else if ((arg == "--socket" || arg == "-s") && i + 1 < argc) {
+            socketPath = argv[++i];
+        } else if ((arg == "--mode" || arg == "-m") && i + 1 < argc) {
+            mode = argv[++i];
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: local-llm [--mode server|mic] [--config /path/models.json] [--socket /run/local-llm.sock]\n";
+            return 0;
+        }
+    }
+
     // Load configuration
     auto& config = ConfigManager::getInstance();
-    if (!config.loadConfig("../config/models.json")) {
+    if (!config.loadConfig(configPath)) {
         std::cout << "Using default configuration (config file not found or invalid)" << std::endl;
     }
 
     std::signal(SIGINT, handle_sigint);
+    std::signal(SIGTERM, handle_sigint);
 
-    // Initialize audio capture with configurable buffer size
-    audio_async audio(config.getAudioBufferMs());
-
-    // Try to open the default microphone
-    if (!audio.init(-1, config.getAudioSampleRate())) {
-        std::cerr << "audio.init() failed\n";
-        return 1;
-    }
-
-    // Start capturing audio
-    audio.resume();
-    std::cout << "Listening... (press Ctrl+C to stop)\n";
-
-    // Load models from configuration
-    const std::string whisper_model_path = config.getModelPath("stt", "whisper");
+    // Load LLM model path
     const std::string llama_model_path = config.getModelPath("llm", "llama");
-
-    // Create and initialize STT backend
-    STT stt;
-    if (!stt.init(whisper_model_path)) {
-        std::cerr << "Failed to initialize STT backend\n";
-        return 1;
-    }
-
-    // Create and initialize LLM backend
     LLM llm;
     if (!llm.init(llama_model_path)) {
         std::cerr << "Failed to initialize LLM backend\n";
         return 1;
     }
 
-    // Create and initialize TTS backend
+    if (mode == "server") {
+        // run unix socket server
+        int rc = run_server(socketPath, llm, keep_running);
+        llm.shutdown();
+        return rc;
+    }
+
+    // mic mode: initialize STT and TTS
+    // Initialize audio capture with configurable buffer size
+    audio_async audio(config.getAudioBufferMs());
+    if (!audio.init(-1, config.getAudioSampleRate())) {
+        std::cerr << "audio.init() failed\n";
+        return 1;
+    }
+    audio.resume();
+    std::cout << "Listening... (press Ctrl+C to stop)\n";
+
+    const std::string whisper_model_path = config.getModelPath("stt", "whisper");
+    STT stt;
+    if (!stt.init(whisper_model_path)) {
+        std::cerr << "Failed to initialize STT backend\n";
+        return 1;
+    }
     TTS tts;
     if (!tts.init()) {
         std::cerr << "Failed to initialize TTS backend\n";
         return 1;
     }
-
     std::cout << "All backends initialized\n";
 
-    // Transcription loop
     std::vector<float> pcmf32;
     while (keep_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Small sleep to reduce CPU usage
-
-        audio.get(VAD_PRE_WINDOW_MS, pcmf32);  // Fetch latest audio
-
-        // Run simple voice activity detection to decide if someone is speaking
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        audio.get(VAD_PRE_WINDOW_MS, pcmf32);
         if (::vad_simple(pcmf32, config.getAudioSampleRate(), VAD_START_MS, config.getVadThreshold(), VAD_FREQ_CUTOFF, VAD_PRINT_ENERGY))
         {
-            audio.get(config.getVadCaptureMs(), pcmf32);  // Fetch detected speech
+            audio.get(config.getVadCaptureMs(), pcmf32);
 
-            // Transcribe audio using STT backend
             std::string text;
             if (stt.transcribe(pcmf32, text) && !text.empty()) {
                 std::cout << "→ " << text << "\n";
-
-                // Generate response using LLM backend
                 std::string response;
                 if (llm.generate(text, response)) {
                     std::cout << "BMO: " << response << "\n";
-                    
-                    // Speak the response using TTS
                     if (!tts.speak(response)) {
                         std::cerr << "TTS failed to speak response\n";
                     }
-                }
-                else {
+                } else {
                     std::cerr << "LLM generation failed\n";
                 }
             }
-
             audio.clear();
         }
     }
@@ -150,7 +159,6 @@ int main(int argc, char** argv) {
     llm.shutdown();
     tts.shutdown();
     audio.pause();
-
     std::cout << "\nProgram Ended\n";
     return 0;
 }

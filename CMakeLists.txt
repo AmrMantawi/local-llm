@@ -42,6 +42,7 @@ set(SOURCES
     src/main.cpp
     src/common-sdl.cpp
     src/common.cpp
+    src/server.cpp
 )
 
 if(USE_WHISPER)
