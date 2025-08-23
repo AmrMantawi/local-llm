@@ -1,6 +1,11 @@
 #include "common-sdl.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include <string>
+#include <unordered_set>
+#include <mutex>
 
 audio_async::audio_async(int len_ms) {
     m_len_ms = len_ms;
@@ -17,65 +22,100 @@ audio_async::~audio_async() {
 bool audio_async::init(int capture_id, int sample_rate) {
     SDL_LogSetPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO);
 
-    if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't initialize SDL: %s\n", SDL_GetError());
-        return false;
+    static std::mutex sdl_audio_init_mutex;
+    std::lock_guard<std::mutex> lock(sdl_audio_init_mutex);
+
+    std::vector<std::string> driver_order;
+    const char *env_driver = std::getenv("SDL_AUDIODRIVER");
+    if (env_driver && env_driver[0] != '\0') {
+        driver_order.emplace_back(env_driver);
+    }
+    // Reasonable fallbacks across common platforms
+    const char *fallbacks[] = {"pipewire", "pulse", "alsa", "dsp", "dummy"};
+    for (const char *drv : fallbacks) {
+        driver_order.emplace_back(drv);
+    }
+    // de-duplicate while preserving order
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> drivers;
+    for (const auto &d : driver_order) {
+        if (seen.insert(d).second) drivers.push_back(d);
     }
 
-    SDL_SetHintWithPriority(SDL_HINT_AUDIO_RESAMPLING_MODE, "medium", SDL_HINT_OVERRIDE);
+    std::string last_error;
+    for (const auto &driver : drivers) {
+        setenv("SDL_AUDIODRIVER", driver.c_str(), 1);
 
-    {
+        // Re-init the audio subsystem for each driver attempt
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            last_error = SDL_GetError();
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't initialize SDL audio with driver '%s': %s\n", driver.c_str(), last_error.c_str());
+            continue;
+        }
+
+        SDL_SetHintWithPriority(SDL_HINT_AUDIO_RESAMPLING_MODE, "medium", SDL_HINT_OVERRIDE);
+
         int nDevices = SDL_GetNumAudioDevices(SDL_TRUE);
-        fprintf(stderr, "%s: found %d capture devices:\n", __func__, nDevices);
+        if (nDevices < 0) {
+            last_error = SDL_GetError();
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_GetNumAudioDevices failed (driver '%s'): %s\n", driver.c_str(), last_error.c_str());
+            // Try next driver
+            continue;
+        }
+
+        fprintf(stderr, "%s: using SDL_AUDIODRIVER='%s', found %d capture devices:\n", __func__, driver.c_str(), nDevices);
         for (int i = 0; i < nDevices; i++) {
             fprintf(stderr, "%s:    - Capture device #%d: '%s'\n", __func__, i, SDL_GetAudioDeviceName(i, SDL_TRUE));
         }
+
+        SDL_AudioSpec capture_spec_requested;
+        SDL_AudioSpec capture_spec_obtained;
+
+        SDL_zero(capture_spec_requested);
+        SDL_zero(capture_spec_obtained);
+
+        capture_spec_requested.freq     = sample_rate;
+        capture_spec_requested.format   = AUDIO_F32;
+        capture_spec_requested.channels = 1;
+        capture_spec_requested.samples  = 1024;
+        capture_spec_requested.callback = [](void * userdata, uint8_t * stream, int len) {
+            audio_async * audio = (audio_async *) userdata;
+            audio->callback(stream, len);
+        };
+        capture_spec_requested.userdata = this;
+
+        if (capture_id >= 0) {
+            fprintf(stderr, "%s: attempt to open capture device %d : '%s' ...\n", __func__, capture_id, SDL_GetAudioDeviceName(capture_id, SDL_TRUE));
+            m_dev_id_in = SDL_OpenAudioDevice(SDL_GetAudioDeviceName(capture_id, SDL_TRUE), SDL_TRUE, &capture_spec_requested, &capture_spec_obtained, 0);
+        } else {
+            fprintf(stderr, "%s: attempt to open default capture device ...\n", __func__);
+            m_dev_id_in = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &capture_spec_requested, &capture_spec_obtained, 0);
+        }
+
+        if (!m_dev_id_in) {
+            last_error = SDL_GetError();
+            fprintf(stderr, "%s: couldn't open an audio device for capture with driver '%s': %s!\n", __func__, driver.c_str(), last_error.c_str());
+            m_dev_id_in = 0;
+            // Try next driver
+            continue;
+        } else {
+            fprintf(stderr, "%s: obtained spec for input device (SDL Id = %d):\n", __func__, m_dev_id_in);
+            fprintf(stderr, "%s:     - sample rate:       %d\n",                   __func__, capture_spec_obtained.freq);
+            fprintf(stderr, "%s:     - format:            %d (required: %d)\n",    __func__, capture_spec_obtained.format,
+                    capture_spec_requested.format);
+            fprintf(stderr, "%s:     - channels:          %d (required: %d)\n",    __func__, capture_spec_obtained.channels,
+                    capture_spec_requested.channels);
+            fprintf(stderr, "%s:     - samples per frame: %d\n",                   __func__, capture_spec_obtained.samples);
+        }
+
+        m_sample_rate = capture_spec_obtained.freq;
+        m_audio.resize((m_sample_rate*m_len_ms)/1000);
+        return true;
     }
 
-    SDL_AudioSpec capture_spec_requested;
-    SDL_AudioSpec capture_spec_obtained;
-
-    SDL_zero(capture_spec_requested);
-    SDL_zero(capture_spec_obtained);
-
-    capture_spec_requested.freq     = sample_rate;
-    capture_spec_requested.format   = AUDIO_F32;
-    capture_spec_requested.channels = 1;
-    capture_spec_requested.samples  = 1024;
-    capture_spec_requested.callback = [](void * userdata, uint8_t * stream, int len) {
-        audio_async * audio = (audio_async *) userdata;
-        audio->callback(stream, len);
-    };
-    capture_spec_requested.userdata = this;
-
-    if (capture_id >= 0) {
-        fprintf(stderr, "%s: attempt to open capture device %d : '%s' ...\n", __func__, capture_id, SDL_GetAudioDeviceName(capture_id, SDL_TRUE));
-        m_dev_id_in = SDL_OpenAudioDevice(SDL_GetAudioDeviceName(capture_id, SDL_TRUE), SDL_TRUE, &capture_spec_requested, &capture_spec_obtained, 0);
-    } else {
-        fprintf(stderr, "%s: attempt to open default capture device ...\n", __func__);
-        m_dev_id_in = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &capture_spec_requested, &capture_spec_obtained, 0);
-    }
-
-    if (!m_dev_id_in) {
-        fprintf(stderr, "%s: couldn't open an audio device for capture: %s!\n", __func__, SDL_GetError());
-        m_dev_id_in = 0;
-
-        return false;
-    } else {
-        fprintf(stderr, "%s: obtained spec for input device (SDL Id = %d):\n", __func__, m_dev_id_in);
-        fprintf(stderr, "%s:     - sample rate:       %d\n",                   __func__, capture_spec_obtained.freq);
-        fprintf(stderr, "%s:     - format:            %d (required: %d)\n",    __func__, capture_spec_obtained.format,
-                capture_spec_requested.format);
-        fprintf(stderr, "%s:     - channels:          %d (required: %d)\n",    __func__, capture_spec_obtained.channels,
-                capture_spec_requested.channels);
-        fprintf(stderr, "%s:     - samples per frame: %d\n",                   __func__, capture_spec_obtained.samples);
-    }
-
-    m_sample_rate = capture_spec_obtained.freq;
-
-    m_audio.resize((m_sample_rate*m_len_ms)/1000);
-
-    return true;
+    fprintf(stderr, "%s: failed to initialize SDL audio capture across all drivers. Last error: %s\n", __func__, last_error.c_str());
+    return false;
 }
 
 bool audio_async::resume() {

@@ -22,6 +22,14 @@ public:
             return "../models/llm/jan-nano-4b-Q3_K_M.gguf";
         } else if (category == "tts" && type == "piper") {
             return "../models/tts/en_US-lessac-medium.onnx";
+        } else if (category == "tts" && type == "paroli_encoder") {
+            return "../models/tts/paroli/encoder.onnx";
+        } else if (category == "tts" && type == "paroli_decoder") {
+            return "../models/tts/paroli/decoder.onnx";
+        } else if (category == "tts" && type == "paroli_config") {
+            return "../models/tts/paroli/config.json";
+        } else if (category == "tts" && type == "paroli_espeak_data") {
+            return "../models/tts/paroli/espeak-ng-data";
         }
         return "";
     }

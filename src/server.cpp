@@ -30,6 +30,12 @@ using STT = WhisperSTT;
 using TTS = TTSPiper;
 #endif
 
+#ifdef USE_Paroli
+#include "tts_paroli.h"
+using TTS = TTSParoli;
+#endif
+
+
 namespace {
 int create_and_listen(const std::string &socketPath) {
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -95,7 +101,13 @@ void handle_client(int client_fd, ILLM &llm) {
         const bool   VAD_PRINT_ENERGY  = false;
 
         audio_async audio(config.getAudioBufferMs());
-        if (!audio.init(-1, config.getAudioSampleRate())) {
+        // Retry audio initialization a few times to avoid race conditions at boot
+        bool audio_initialized = false;
+        for (int attempt = 1; attempt <= 8; ++attempt) {
+            if (audio.init(-1, config.getAudioSampleRate())) { audio_initialized = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        if (!audio_initialized) {
             const char *msg = "{\"error\":\"audio.init() failed\"}\n";
             fwrite(msg, 1, std::strlen(msg), fp);
             fflush(fp);
@@ -118,7 +130,7 @@ void handle_client(int client_fd, ILLM &llm) {
         }
 #endif
 
-#ifdef USE_Piper
+#if defined(USE_Piper) || defined(USE_Paroli)
         TTS tts;
         bool tts_initialized = false;
         try {
@@ -162,7 +174,7 @@ void handle_client(int client_fd, ILLM &llm) {
                         std::string respOut = std::string("BMO: ") + responseText + "\n";
                         if (fwrite(respOut.data(), 1, respOut.size(), fp) != respOut.size()) break;
                         fflush(fp);
-#ifdef USE_Piper
+#if defined(USE_Piper) || defined(USE_Paroli)
                         if (tts_initialized) {
                             (void) tts.speak(responseText);
                         }
@@ -183,7 +195,7 @@ void handle_client(int client_fd, ILLM &llm) {
         }
 
         audio.pause();
-#ifdef USE_Piper
+#if defined(USE_Piper) || defined(USE_Paroli)
         if (tts_initialized) {
             tts.shutdown();
         }

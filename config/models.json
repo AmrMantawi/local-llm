@@ -15,10 +15,25 @@
       }
     },
     "tts": {
-      "piper": {
-        "path": "../models/tts/en_US-lessac-medium.onnx",
-        "type": "piper",
-        "description": "Piper English voice model for text-to-speech"
+      "paroli_encoder": {
+        "path": "../models/tts/encoder.onnx",
+        "type": "paroli",
+        "description": "Paroli encoder model (ONNX)"
+      },
+      "paroli_decoder": {
+        "path": "../models/tts/decoder.onnx",
+        "type": "paroli",
+        "description": "Paroli decoder model (ONNX)"
+      },
+      "paroli_config": {
+        "path": "../models/tts/config.json",
+        "type": "paroli",
+        "description": "Paroli model configuration JSON"
+      },
+      "paroli_espeak_data": {
+        "path": "../models/tts/piper_phonemize/share/espeak-ng-data",
+        "type": "paroli",
+        "description": "eSpeak NG data directory required by Paroli"
       }
     }
   },

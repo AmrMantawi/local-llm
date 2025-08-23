@@ -7,3 +7,6 @@
 [submodule "third_party/piper"]
 	path = third_party/piper
 	url = https://github.com/rhasspy/piper.git
+[submodule "third_party/paroli-daemon"]
+	path = third_party/paroli-daemon
+	url = git@github.com:AmrMantawi/paroli-daemon.git

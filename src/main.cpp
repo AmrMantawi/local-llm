@@ -21,6 +21,9 @@
 #ifdef USE_Piper
 #include "tts_piper.h"
 #endif
+#ifdef USE_Paroli
+#include "tts_paroli.h"
+#endif
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -107,11 +110,18 @@ int main(int argc, char** argv) {
     }
 
     // mic mode: initialize STT and TTS
-    // Initialize audio capture with configurable buffer size
+    // Initialize audio capture with configurable buffer size; retry to avoid startup races
     audio_async audio(config.getAudioBufferMs());
-    if (!audio.init(-1, config.getAudioSampleRate())) {
-        std::cerr << "audio.init() failed\n";
-        return 1;
+    {
+        bool audio_initialized = false;
+        for (int attempt = 1; attempt <= 8; ++attempt) {
+            if (audio.init(-1, config.getAudioSampleRate())) { audio_initialized = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        if (!audio_initialized) {
+            std::cerr << "audio.init() failed\n";
+            return 1;
+        }
     }
     audio.resume();
     std::cout << "Listening... (press Ctrl+C to stop)\n";
@@ -123,9 +133,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     TTS tts;
+    bool tts_initialized = false;
     if (!tts.init()) {
         std::cerr << "Failed to initialize TTS backend\n";
-        return 1;
+    } else {
+        tts_initialized = true;
     }
     std::cout << "All backends initialized\n";
 
@@ -143,8 +155,10 @@ int main(int argc, char** argv) {
                 std::string response;
                 if (llm.generate(text, response)) {
                     std::cout << "BMO: " << response << "\n";
-                    if (!tts.speak(response)) {
-                        std::cerr << "TTS failed to speak response\n";
+                    if (tts_initialized) {
+                        if (!tts.speak(response)) {
+                            std::cerr << "TTS failed to speak response\n";
+                        }
                     }
                 } else {
                     std::cerr << "LLM generation failed\n";
@@ -157,7 +171,9 @@ int main(int argc, char** argv) {
     // Cleanup
     stt.shutdown();
     llm.shutdown();
-    tts.shutdown();
+    if (tts_initialized) {
+        tts.shutdown();
+    }
     audio.pause();
     std::cout << "\nProgram Ended\n";
     return 0;
