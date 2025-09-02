@@ -389,6 +389,198 @@ bool LlamaLLM::generate(const std::string &prompt, std::string &response) {
     return true;
 }
 
+bool LlamaLLM::generate_async(const std::string &prompt, std::string &response, 
+                             std::function<void(const std::string&)> sentence_callback) {
+    // Tokenize the user's input prompt
+    const std::vector<llama_token> tokens = llama_tokenize(ctx, prompt.c_str(), false);
+    if (prompt.empty() || tokens.empty()) {
+        response = "";
+        return true;
+    }
+    
+    // Format the input for the model: add space prefix and bot response format
+    std::string formatted_text = " " + prompt;
+    formatted_text += "\nBMO" + chat_symb;
+
+    // Tokenize the formatted input
+    embd = ::llama_tokenize(ctx, formatted_text, false);
+
+    // Update session tokens if session saving is enabled
+    if (!path_session.empty()) {
+        session_tokens.insert(session_tokens.end(), tokens.begin(), tokens.end());
+    }
+
+    // Main text generation loop with sentence-level streaming
+    bool done = false;
+    std::string text_to_speak;
+    std::string current_sentence;
+    
+    while (true) {
+        // Process input tokens if we have any
+        if (embd.size() > 0) {
+            // Check if we're running out of context window
+            if (n_past + (int) embd.size() > n_ctx) {
+                // Reset context and keep only the most recent tokens
+                n_past = n_keep;
+
+                // Insert recent tokens at the start to maintain some context
+                embd.insert(embd.begin(), embd_inp.begin() + embd_inp.size() - n_prev, embd_inp.end());
+                // Disable session saving if context is full
+                path_session = "";
+            }
+
+            // Try to reuse matching tokens from saved session to avoid recomputation
+            if (n_session_consumed < (int) session_tokens.size()) {
+                size_t i = 0;
+                for ( ; i < embd.size(); i++) {
+                    if (embd[i] != session_tokens[n_session_consumed]) {
+                        // Mismatch found, truncate session
+                        session_tokens.resize(n_session_consumed);
+                        break;
+                    }
+
+                    n_past++;
+                    n_session_consumed++;
+
+                    if (n_session_consumed >= (int) session_tokens.size()) {
+                        i++;
+                        break;
+                    }
+                }
+                if (i > 0) {
+                    // Remove processed tokens from input
+                    embd.erase(embd.begin(), embd.begin() + i);
+                }
+            }
+
+            // Update session with new tokens
+            if (embd.size() > 0 && !path_session.empty()) {
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
+                n_session_consumed = session_tokens.size();
+            }
+
+            // Prepare batch for decoding
+            {
+                batch.n_tokens = embd.size();
+
+                for (int i = 0; i < batch.n_tokens; i++) {
+                    batch.token[i]     = embd[i];
+                    batch.pos[i]       = n_past + i;
+                    batch.n_seq_id[i]  = 1;
+                    batch.seq_id[i][0] = 0;
+                    batch.logits[i]    = i == batch.n_tokens - 1;  // Only compute logits for last token
+                }
+            }
+
+            // Decode the tokens through the model
+            if (llama_decode(ctx, batch)) {
+                fprintf(stderr, "%s : failed to decode\n", __func__);
+                return false;
+            }
+        }
+
+        // Add processed tokens to input history
+        embd_inp.insert(embd_inp.end(), embd.begin(), embd.end());
+        n_past += embd.size();
+
+        // Clear processed tokens
+        embd.clear();
+
+        // Exit if generation is complete
+        if (done) break;
+
+        {
+            // Generate next token using the sampler
+
+            // Save session state if needed
+            if (!path_session.empty() && need_to_save_session) {
+                need_to_save_session = false;
+                llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+            }
+
+            // Sample next token from the model
+            const llama_token id = llama_sampler_sample(smpl, ctx, -1);
+
+            if (id != llama_vocab_eos(vocab)) {
+                // Add the new token to the generation
+                embd.push_back(id);
+
+                // Convert token to text and add to response
+                std::string token_text = llama_token_to_piece(ctx, id);
+                text_to_speak += token_text;
+                current_sentence += token_text;
+
+                // Check for sentence completion (. ! ?)
+                if (token_text.find('.') != std::string::npos || 
+                    token_text.find('!') != std::string::npos || 
+                    token_text.find('?') != std::string::npos) {
+                    
+                    // Trim whitespace and check if sentence has meaningful content
+                    std::string trimmed_sentence = current_sentence;
+                    // Remove leading/trailing whitespace
+                    size_t start = trimmed_sentence.find_first_not_of(" \t\n\r");
+                    if (start != std::string::npos) {
+                        size_t end = trimmed_sentence.find_last_not_of(" \t\n\r");
+                        trimmed_sentence = trimmed_sentence.substr(start, end - start + 1);
+                        
+                        // Only queue non-empty sentences with some meaningful content
+                        if (!trimmed_sentence.empty() && trimmed_sentence.length() > 2) {
+                            sentence_callback(trimmed_sentence);
+                        }
+                    }
+                    
+                    // Reset current sentence for next one
+                    current_sentence.clear();
+                }
+            }
+        }
+
+        {
+            // Check for antiprompts (stop conditions) in the recent output
+            std::string last_output;
+            // Look at the last 16 tokens to check for stop conditions
+            for (int i = embd_inp.size() - 16; i < (int) embd_inp.size(); i++) {
+                if (i >= 0) {
+                    last_output += llama_token_to_piece(ctx, embd_inp[i]);
+                }
+            }
+            if (!embd.empty()) {
+                last_output += llama_token_to_piece(ctx, embd[0]);
+            }
+
+            // Check if any antiprompt patterns are found
+            for (std::string & antiprompt : antiprompts) {
+                if (last_output.find(antiprompt.c_str(), last_output.length() - antiprompt.length(), antiprompt.length()) != std::string::npos) {
+                    done = true;
+                    // Remove the antiprompt from the response
+                    text_to_speak = ::replace(text_to_speak, antiprompt, "");
+                    need_to_save_session = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Handle any remaining text that didn't end with sentence punctuation
+    if (!current_sentence.empty()) {
+        std::string trimmed_sentence = current_sentence;
+        size_t start = trimmed_sentence.find_first_not_of(" \t\n\r");
+        if (start != std::string::npos) {
+            size_t end = trimmed_sentence.find_last_not_of(" \t\n\r");
+            trimmed_sentence = trimmed_sentence.substr(start, end - start + 1);
+            
+            if (!trimmed_sentence.empty() && trimmed_sentence.length() > 2) {
+                sentence_callback(trimmed_sentence);
+            }
+        }
+    }
+
+    // Set the final response
+    response = text_to_speak;
+    
+    return true;
+}
+
 void LlamaLLM::shutdown() {
     // Free the sampler
     llama_sampler_free(smpl);

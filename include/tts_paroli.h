@@ -13,11 +13,13 @@ public:
     ~TTSParoli();
     
     bool init() override;
-    bool speak(const std::string &text) override;
+    bool speak(const std::string &text, async_pipeline::AudioChunkMessage& audio_chunk) override;
+
+    // TODO: Add async speak with callback for streaming audio
+
     void shutdown() override;
 
 private:
-    bool initialized;
     std::string encoder_path;
     std::string decoder_path;
     std::string config_path;

@@ -1,11 +1,12 @@
 #include "tts_paroli.h"
 #include "config_manager.h"
 #include "paroli_daemon.hpp"
+#include "async_pipeline.h"
 #include <iostream>
 #include <filesystem>
+#include <vector>
 
-TTSParoli::TTSParoli() 
-    : initialized(false) {
+TTSParoli::TTSParoli() {
 }
 
 TTSParoli::~TTSParoli() {
@@ -16,11 +17,12 @@ bool TTSParoli::init() {
     // Initialize from configuration
     auto& config = ConfigManager::getInstance();
     
-    // Get model paths from config
-    encoder_path = config.getModelPath("tts", "paroli_encoder");
-    decoder_path = config.getModelPath("tts", "paroli_decoder");
-    config_path = config.getModelPath("tts", "paroli_config");
-    espeak_data_path = config.getModelPath("tts", "paroli_espeak_data");
+    // Get model paths from config using generalized method
+    auto paroli_paths = config.getParoliModelPaths();
+    encoder_path = paroli_paths.encoder;
+    decoder_path = paroli_paths.decoder;
+    config_path = paroli_paths.config;
+    espeak_data_path = paroli_paths.espeak_data;
     
     // Check if model files exist
     if (!std::filesystem::exists(encoder_path)) {
@@ -62,7 +64,6 @@ bool TTSParoli::init() {
         // Set volume to 0.8 (80%)
         synthesizer->setVolume(0.8f);
         
-        initialized = true;
         std::cout << "TTS (Paroli) initialized\n";
         return true;
         
@@ -72,8 +73,8 @@ bool TTSParoli::init() {
     }
 }
 
-bool TTSParoli::speak(const std::string &text) {
-    if (!initialized || !synthesizer) {
+bool TTSParoli::speak(const std::string &text, async_pipeline::AudioChunkMessage& audio_chunk) {
+    if (!synthesizer) {
         std::cerr << "TTS not initialized" << std::endl;
         return false;
     }
@@ -83,19 +84,32 @@ bool TTSParoli::speak(const std::string &text) {
     }
 
     try {
-        // Use the speak method which directly outputs to speakers
-        bool success = synthesizer->speak(text);
-        if (!success) {
-            std::cerr << "Paroli speak failed: " << synthesizer->getLastError() << std::endl;
+        // Generate complete audio for the text
+        std::vector<int16_t> audio_data = synthesizer->synthesizePcm(text);
+        
+        if (audio_data.empty()) {
+            std::cerr << "Failed to generate audio for text: " << text << std::endl;
+            return false;
         }
-        return success;
+        
+        // Write audio data to the provided AudioChunkMessage
+        audio_chunk.audio_data = std::move(audio_data);
+        audio_chunk.sample_rate = synthesizer->nativeSampleRate();
+        
+        return true;
+        
     } catch (const std::exception& e) {
-        std::cerr << "Exception during speech synthesis: " << e.what() << std::endl;
+        std::cerr << "TTS synthesis error: " << e.what() << std::endl;
         return false;
     }
 }
 
 void TTSParoli::shutdown() {
-    initialized = false;
+    if (!synthesizer) {
+        return; // Already shut down
+    }
+    
+    // Nothing to interrupt since synthesis is synchronous
+    
     synthesizer.reset();
 }

@@ -12,14 +12,9 @@ public:
     WhisperSTT() = default;
 
     /// Load the Whisper model from the given file.
-    /// @param modelPath path to a ggml Whisper model.
-    /// @return true on success, false on failure.
     bool init(const std::string &modelPath) override;
 
     /// Transcribe a single audio buffer.
-    /// @param pcmf32 input audio.
-    /// @param out resulting UTF-8 text.
-    /// @return true on success, false on failure.
     bool transcribe(const std::vector<float> &pcmf32, std::string &outText) override;
 
     /// Release any resources held by Whisper.
