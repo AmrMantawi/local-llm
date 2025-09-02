@@ -33,8 +33,20 @@ bool STTProcessor::initialize() {
     
     // Initialize audio capture
     audio_ = new audio_async(buffer_ms_);
-    if (!audio_->init(-1, sample_rate_)) {
-        std::cerr << "[STTProcessor] Failed to initialize audio capture" << std::endl;
+    bool audio_initialized = false;
+    for (int attempt = 1; attempt <= 8; ++attempt) {
+        std::cout << "[STTProcessor] Audio init attempt " << attempt << "/8..." << std::endl;
+        if (audio_->init(-1, sample_rate_)) {
+            audio_initialized = true;
+            std::cout << "[STTProcessor] Audio initialization successful on attempt " << attempt << std::endl;
+            break;
+        }
+        std::cerr << "[STTProcessor] Audio init attempt " << attempt << " failed, retrying in 500ms..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    
+    if (!audio_initialized) {
+        std::cerr << "[STTProcessor] Failed to initialize audio capture after 8 attempts" << std::endl;
         return false;
     }
     
@@ -70,6 +82,7 @@ void STTProcessor::process() {
     }
     
     if (!audio_) {
+        std::cerr << "[STTProcessor] WARNING: audio_ is null!" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return;
     }
@@ -191,19 +204,20 @@ void LLMProcessor::process() {
         
         // Generate response
         std::string response;
-        bool success = llm_->generate(input_msg.text, response);
+        bool success = llm_->generate_async(input_msg.text, response, 
+            [this](const std::string& sentence) {
+                // Create response message
+                TextMessage response_msg(sentence);
+                
+                // Push to output queue
+                if (!output_queue_.push(std::move(response_msg), std::chrono::milliseconds(1000))) {
+                    std::cerr << "[LLMProcessor] Failed to push response message (queue full)" << std::endl;
+                } else {
+                    std::cout << "[LLMProcessor] → " << sentence << std::endl;
+                }
+            });
         
-        if (success && !response.empty()) {
-            // Create response message
-            TextMessage response_msg(response);
-            
-            // Push to output queue
-            if (!output_queue_.push(std::move(response_msg), std::chrono::milliseconds(1000))) {
-                std::cerr << "[LLMProcessor] Failed to push response message (queue full)" << std::endl;
-            } else {
-                std::cout << "[LLMProcessor] → " << response << std::endl;
-            }
-        } else {
+        if (!success) {
             std::cerr << "[LLMProcessor] Failed to generate response for: " << input_msg.text << std::endl;
         }
     } else {

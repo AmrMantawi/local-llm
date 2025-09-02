@@ -149,23 +149,6 @@ public:
             return 10000; // default
         }
     }
-    
-    int getTtsVoiceId() const {
-        try {
-            return config["settings"]["tts"]["voice_id"].get<int>();
-        } catch (const std::exception& e) {
-            return 2; // default
-        }
-    }
-    
-    std::string getTtsSpeakScript() const {
-        try {
-            return config["settings"]["tts"]["speak_script"].get<std::string>();
-        } catch (const std::exception& e) {
-            return "../scripts/speak"; // default
-        }
-    }
-    
 private:
     ConfigManager() = default;
     nlohmann::json config;
