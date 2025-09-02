@@ -390,7 +390,7 @@ bool LlamaLLM::generate(const std::string &prompt, std::string &response) {
 }
 
 bool LlamaLLM::generate_async(const std::string &prompt, std::string &response, 
-                             std::function<void(const std::string&)> sentence_callback) {
+                             std::function<void(const std::string&)> callback) {
     // Tokenize the user's input prompt
     const std::vector<llama_token> tokens = llama_tokenize(ctx, prompt.c_str(), false);
     if (prompt.empty() || tokens.empty()) {
@@ -410,10 +410,12 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
         session_tokens.insert(session_tokens.end(), tokens.begin(), tokens.end());
     }
 
-    // Main text generation loop with sentence-level streaming
+    // Main text generation loop with chunk-level streaming
     bool done = false;
     std::string text_to_speak;
+    std::string current_chunk;
     std::string current_sentence;
+    int word_count = 0;
     
     while (true) {
         // Process input tokens if we have any
@@ -508,28 +510,42 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
                 // Convert token to text and add to response
                 std::string token_text = llama_token_to_piece(ctx, id);
                 text_to_speak += token_text;
+                current_chunk += token_text;
                 current_sentence += token_text;
 
+                // Count words (tokens that contain letters and are followed by space or punctuation)
+                if (!token_text.empty() && std::isalpha(token_text[0])) {
+                    word_count++;
+                }
+
                 // Check for sentence completion (. ! ?)
-                if (token_text.find('.') != std::string::npos || 
-                    token_text.find('!') != std::string::npos || 
-                    token_text.find('?') != std::string::npos) {
-                    
-                    // Trim whitespace and check if sentence has meaningful content
-                    std::string trimmed_sentence = current_sentence;
+                bool sentence_ended = (token_text.find('.') != std::string::npos || 
+                                     token_text.find('!') != std::string::npos || 
+                                     token_text.find('?') != std::string::npos);
+
+                // Send chunk every 3 words OR at sentence end
+                if (word_count >= 3 || sentence_ended) {
+                    // Trim whitespace and check if chunk has meaningful content
+                    std::string trimmed_chunk = current_chunk;
                     // Remove leading/trailing whitespace
-                    size_t start = trimmed_sentence.find_first_not_of(" \t\n\r");
+                    size_t start = trimmed_chunk.find_first_not_of(" \t\n\r");
                     if (start != std::string::npos) {
-                        size_t end = trimmed_sentence.find_last_not_of(" \t\n\r");
-                        trimmed_sentence = trimmed_sentence.substr(start, end - start + 1);
+                        size_t end = trimmed_chunk.find_last_not_of(" \t\n\r");
+                        trimmed_chunk = trimmed_chunk.substr(start, end - start + 1);
                         
-                        // Only queue non-empty sentences with some meaningful content
-                        if (!trimmed_sentence.empty() && trimmed_sentence.length() > 2) {
-                            sentence_callback(trimmed_sentence);
+                        // Only queue non-empty chunks with some meaningful content
+                        if (!trimmed_chunk.empty() && trimmed_chunk.length() > 2) {
+                            callback(trimmed_chunk);
                         }
                     }
                     
-                    // Reset current sentence for next one
+                    // Reset current chunk for next one
+                    current_chunk.clear();
+                    word_count = 0;
+                }
+
+                // If sentence ended, also reset sentence tracking
+                if (sentence_ended) {
                     current_sentence.clear();
                 }
             }
@@ -561,16 +577,16 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
         }
     }
 
-    // Handle any remaining text that didn't end with sentence punctuation
-    if (!current_sentence.empty()) {
-        std::string trimmed_sentence = current_sentence;
-        size_t start = trimmed_sentence.find_first_not_of(" \t\n\r");
+    // Handle any remaining text that hasn't been sent yet
+    if (!current_chunk.empty()) {
+        std::string trimmed_chunk = current_chunk;
+        size_t start = trimmed_chunk.find_first_not_of(" \t\n\r");
         if (start != std::string::npos) {
-            size_t end = trimmed_sentence.find_last_not_of(" \t\n\r");
-            trimmed_sentence = trimmed_sentence.substr(start, end - start + 1);
+            size_t end = trimmed_chunk.find_last_not_of(" \t\n\r");
+            trimmed_chunk = trimmed_chunk.substr(start, end - start + 1);
             
-            if (!trimmed_sentence.empty() && trimmed_sentence.length() > 2) {
-                sentence_callback(trimmed_sentence);
+            if (!trimmed_chunk.empty() && trimmed_chunk.length() > 2) {
+                callback(trimmed_chunk);
             }
         }
     }

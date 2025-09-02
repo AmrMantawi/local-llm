@@ -205,15 +205,15 @@ void LLMProcessor::process() {
         // Generate response
         std::string response;
         bool success = llm_->generate_async(input_msg.text, response, 
-            [this](const std::string& sentence) {
+            [this](const std::string& text_chunk) {
                 // Create response message
-                TextMessage response_msg(sentence);
+                TextMessage response_msg(text_chunk);
                 
                 // Push to output queue
                 if (!output_queue_.push(std::move(response_msg), std::chrono::milliseconds(1000))) {
                     std::cerr << "[LLMProcessor] Failed to push response message (queue full)" << std::endl;
                 } else {
-                    std::cout << "[LLMProcessor] → " << sentence << std::endl;
+                    std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
                 }
             });
         
@@ -310,7 +310,7 @@ void TTSProcessor::process() {
         clear_interrupt();
     }
     
-    // Speak the sentence and get audio data
+    // Speak the chunk and get audio data
     std::cout << "[TTSProcessor] Speaking: " << text_msg.text << std::endl;
     
     // Create AudioChunkMessage to receive the audio data

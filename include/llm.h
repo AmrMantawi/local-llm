@@ -19,13 +19,13 @@ public:
     /// @return true on success, false on failure
     virtual bool generate(const std::string &prompt, std::string &response) = 0;
 
-    /// Async generate with sentence-by-sentence callback for TTS streaming
+    /// Async generate with text chunk callback for TTS streaming
     /// @param prompt Input text prompt
     /// @param response Final accumulated response
-    /// @param sentence_callback Called for each complete sentence generated
+    /// @param callback Called for each complete text chunk generated
     /// @return true on success, false on failure
     virtual bool generate_async(const std::string &prompt, std::string &response, 
-                               std::function<void(const std::string&)> sentence_callback) = 0;
+                               std::function<void(const std::string&)> callback) = 0;
 
     /// Release resources (optional cleanup)
     virtual void shutdown() = 0;
