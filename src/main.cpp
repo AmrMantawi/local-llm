@@ -1,29 +1,7 @@
 // src/main.cpp
 
-// Abstract interfaces
-#include "stt.h"
-#include "tts.h"
 #include "config_manager.h"
-
-// Whisper-specific headers
-#ifdef USE_WHISPER
-#include "common-sdl.h"
-#include "common.h"
-#include "stt_whisper.h"
-#endif
-
-// Llama-specific headers
-#ifdef USE_LLAMA
-#include "llm_llama.h"
-#endif
-
-// TTS-specific headers
-#ifdef USE_Piper
-#include "tts_piper.h"
-#endif
-#ifdef USE_Paroli
-#include "tts_paroli.h"
-#endif
+#include "pipeline_manager.h"
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -33,22 +11,32 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
-#include "server.h"
+#include "pipeline_manager.h"
 
-// Alias the selected backend classes
-using STT = STT_BACKEND;
-using LLM = LLM_BACKEND;
-using TTS = TTS_BACKEND;
+// Server functionality
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <cerrno>
+#include <cstring>
+#include <nlohmann/json.hpp>
 
-// Audio and VAD configuration
-static const int    AUDIO_BUFFER_MS     = 30 * 1000;    // Total buffer size for audio_async 
-static const int    AUDIO_SAMPLE_RATE   = 16000;        // Sample rate for audio capture
-static const int    VAD_PRE_WINDOW_MS   = 2000;         // Duration to check for speech before full capture
-static const int    VAD_CAPTURE_MS      = 10000;        // Duration of audio to capture after speech detected
-static const int    VAD_START_MS        = 1250;         // Start analyzing after this duration
-static const float  VAD_THRESHOLD       = 0.6f;         // Energy threshold for detecting voice
-static const float  VAD_FREQ_CUTOFF     = 100.0f;       // Frequency cutoff for high-pass filter
-static const bool   VAD_PRINT_ENERGY    = false;        // Toggle energy debug print
+// Forward declaration - factory implementation will be linked
+namespace async_pipeline {
+    enum class PipelineMode {
+        VOICE_ASSISTANT,    // Full pipeline: Audio → STT → LLM → TTS -> Audio
+        TEXT_ONLY,          // LLM only: Text → LLM → Text (chat mode)
+        TRANSCRIPTION,      // Audio → STT → Text (transcription service)
+        SYNTHESIS           // Text → TTS → Audio (text-to-speech service)
+    };
+    
+    class PipelineFactory {
+    public:
+        static std::unique_ptr<PipelineManager> create_pipeline(PipelineMode mode = PipelineMode::VOICE_ASSISTANT, bool enable_stats = false);
+    };
+}
 
 // Graceful shutdown on Ctrl+C
 static std::atomic<bool> keep_running{true};
@@ -58,29 +46,32 @@ static void handle_sigint(int)
     keep_running = false;
 }
 
-int main(int argc, char** argv) {
-    // Check if the that STT_BACKEND, LLM_BACKEND, and TTS_BACKEND are defined
-    static_assert(std::is_base_of<ISTT, STT>::value,
-                  "STT_BACKEND must be a subclass of ISTT");
-    static_assert(std::is_base_of<ILLM, LLM>::value,
-                  "LLM_BACKEND must be a subclass of ILLM");
-    static_assert(std::is_base_of<ITTS, TTS>::value,
-                  "TTS_BACKEND must be a subclass of ITTS");
+// Forward declarations
+int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats = false);
+int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running, bool enable_stats = false);
 
-    // CLI flags: --config /path/models.json, --socket /tmp/local-llm.sock (accepted but not implemented)
+int main(int argc, char** argv) {
+
+    // CLI flags: --config /path/models.json, --socket /tmp/local-llm.sock, --server, --stats
     const char* configPath = "/usr/share/local-llm/config/models.json";
     std::string socketPath = "/run/local-llm.sock";
-    std::string mode = "server"; // default server
+    bool server_mode = false; 
+    bool enable_stats = false;
+    
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
             configPath = argv[++i];
         } else if ((arg == "--socket" || arg == "-s") && i + 1 < argc) {
             socketPath = argv[++i];
-        } else if ((arg == "--mode" || arg == "-m") && i + 1 < argc) {
-            mode = argv[++i];
+        } else if (arg == "--server") {
+            server_mode = true;
+        } else if (arg == "--stats") {
+            enable_stats = true;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: local-llm [--mode server|mic] [--config /path/models.json] [--socket /run/local-llm.sock]\n";
+            std::cout << "Usage: local-llm [--server] [--config /path/models.json] [--socket /run/local-llm.sock] [--stats]\n";
+            std::cout << "  --server   Run in server mode (default: CLI mode)\n";
+            std::cout << "  --stats    Enable pipeline statistics logging\n";
             return 0;
         }
     }
@@ -94,87 +85,232 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, handle_sigint);
     std::signal(SIGTERM, handle_sigint);
 
-    // Load LLM model path
-    const std::string llama_model_path = config.getModelPath("llm", "llama");
-    LLM llm;
-    if (!llm.init(llama_model_path)) {
-        std::cerr << "Failed to initialize LLM backend\n";
-        return 1;
+    if (server_mode) {
+        // Server mode: use async pipeline with TEXT_ONLY mode
+        return run_server_mode(socketPath, keep_running, enable_stats);
+    } else {
+        // CLI mode: use async pipeline with VOICE_ASSISTANT mode
+        return run_cli_mode(keep_running, enable_stats);
     }
+}
 
-    if (mode == "server") {
-        // run unix socket server
-        int rc = run_server(socketPath, llm, keep_running);
-        llm.shutdown();
-        return rc;
-    }
-
-    // mic mode: initialize STT and TTS
-    // Initialize audio capture with configurable buffer size; retry to avoid startup races
-    audio_async audio(config.getAudioBufferMs());
-    {
-        bool audio_initialized = false;
-        for (int attempt = 1; attempt <= 8; ++attempt) {
-            if (audio.init(-1, config.getAudioSampleRate())) { audio_initialized = true; break; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        if (!audio_initialized) {
-            std::cerr << "audio.init() failed\n";
+// Pipeline implementation for CLI mode
+int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats) {
+    std::cout << "Starting pipeline for CLI mode...\n";
+    
+    try {
+        // Create voice assistant pipeline (full Audio → STT → LLM → TTS chain)
+        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT, enable_stats);
+        if (!pipeline) {
+            std::cerr << "Failed to create pipeline\n";
             return 1;
         }
-    }
-    audio.resume();
-    std::cout << "Listening... (press Ctrl+C to stop)\n";
-
-    const std::string whisper_model_path = config.getModelPath("stt", "whisper");
-    STT stt;
-    if (!stt.init(whisper_model_path)) {
-        std::cerr << "Failed to initialize STT backend\n";
-        return 1;
-    }
-    TTS tts;
-    bool tts_initialized = false;
-    if (!tts.init()) {
-        std::cerr << "Failed to initialize TTS backend\n";
-    } else {
-        tts_initialized = true;
-    }
-    std::cout << "All backends initialized\n";
-
-    std::vector<float> pcmf32;
-    while (keep_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        audio.get(VAD_PRE_WINDOW_MS, pcmf32);
-        if (::vad_simple(pcmf32, config.getAudioSampleRate(), VAD_START_MS, config.getVadThreshold(), VAD_FREQ_CUTOFF, VAD_PRINT_ENERGY))
-        {
-            audio.get(config.getVadCaptureMs(), pcmf32);
-
-            std::string text;
-            if (stt.transcribe(pcmf32, text) && !text.empty()) {
-                std::cout << "→ " << text << "\n";
-                std::string response;
-                if (llm.generate(text, response)) {
-                    std::cout << "BMO: " << response << "\n";
-                    if (tts_initialized) {
-                        if (!tts.speak(response)) {
-                            std::cerr << "TTS failed to speak response\n";
-                        }
-                    }
-                } else {
-                    std::cerr << "LLM generation failed\n";
+        
+        // Start the pipeline
+        if (!pipeline->start()) {
+            std::cerr << "Failed to start pipeline\n";
+            return 1;
+        }
+        
+        std::cout << "Pipeline started. Listening for speech... (press Ctrl+C to stop)\n";
+        std::cout << "Pipeline components running in parallel threads:\n";
+        std::cout << "  - Audio capture with VAD\n";
+        std::cout << "  - Speech-to-text transcription\n"; 
+        std::cout << "  - Language model generation\n";
+        std::cout << "  - Text-to-speech synthesis\n\n";
+        
+        // Main loop - monitor and optionally display statistics
+        if (enable_stats) {
+            auto last_stats_time = std::chrono::steady_clock::now();
+            const auto stats_interval = std::chrono::seconds(10);
+            
+            while (keep_running && pipeline->is_running()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                // Periodically show statistics
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_stats_time >= stats_interval) {
+                    auto stats = pipeline->get_stats();
+                    std::cout << "\n[Stats] STT: " << stats.stt_stats.messages_processed
+                              << ", LLM: " << stats.llm_stats.messages_processed
+                              << ", TTS: " << stats.tts_stats.messages_processed << std::endl;
+                    std::cout << "[Queues] Text: " << stats.text_queue_size 
+                              << ", Response: " << stats.response_queue_size << std::endl;
+                    last_stats_time = now;
                 }
             }
-            audio.clear();
+        } else {
+            // Just wait without stats logging
+            while (keep_running && pipeline->is_running()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
         }
+        
+        std::cout << "\nStopping pipeline...\n";
+        pipeline->stop();
+        
+        // Show final statistics if enabled
+        if (enable_stats) {
+            auto final_stats = pipeline->get_stats();
+            std::cout << "\n=== Final Statistics ===\n";
+
+            std::cout << "STT processed: " << final_stats.stt_stats.messages_processed << std::endl;
+            std::cout << "LLM processed: " << final_stats.llm_stats.messages_processed << std::endl;
+            std::cout << "TTS processed: " << final_stats.tts_stats.messages_processed << std::endl;
+
+        }
+        
+        std::cout << "Pipeline stopped successfully\n";
+        return 0;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Pipeline error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+// Server functionality using async pipeline
+namespace {
+int create_and_listen(const std::string &socketPath) {
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        std::perror("socket");
+        return -1;
     }
 
-    // Cleanup
-    stt.shutdown();
-    llm.shutdown();
-    if (tts_initialized) {
-        tts.shutdown();
+    ::unlink(socketPath.c_str());
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socketPath.c_str());
+
+    if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        std::perror("bind");
+        ::close(fd);
+        return -1;
     }
-    audio.pause();
-    std::cout << "\nProgram Ended\n";
-    return 0;
+
+    if (::listen(fd, 128) < 0) {
+        std::perror("listen");
+        ::close(fd);
+        ::unlink(socketPath.c_str());
+        return -1;
+    }
+
+    // socket permissions (optional; systemd socket units usually handle perms)
+    ::chmod(socketPath.c_str(), 0660);
+    return fd;
+}
+
+void handle_client_with_pipeline(int client_fd, async_pipeline::PipelineManager& pipeline) {
+    FILE *fp = fdopen(client_fd, "r+");
+    if (!fp) {
+        ::close(client_fd);
+        return;
+    }
+    
+    char *line = nullptr;
+    size_t len = 0;
+    ssize_t nread = getline(&line, &len, fp);
+    if (nread <= 0) {
+        fclose(fp);
+        free(line);
+        return;
+    }
+
+    // Parse JSON request
+    std::string response;
+    try {
+        std::string firstLine(line, static_cast<size_t>(nread));
+        auto req = nlohmann::json::parse(firstLine);
+        std::string prompt = req.value("prompt", "");
+        
+        if (prompt.empty()) {
+            throw std::runtime_error("missing prompt");
+        }
+        
+        // Use pipeline's text processing instead of direct LLM call
+        if (!pipeline.process_text_input(prompt, response)) {
+            throw std::runtime_error("pipeline processing failed");
+        }
+        
+        nlohmann::json resp{{"response", response}};
+        std::string out = resp.dump();
+        out.push_back('\n');
+        fwrite(out.data(), 1, out.size(), fp);
+        fflush(fp);
+        
+    } catch (const std::exception &e) {
+        nlohmann::json err{{"error", e.what()}};
+        std::string out = err.dump();
+        out.push_back('\n');
+        fwrite(out.data(), 1, out.size(), fp);
+        fflush(fp);
+    }
+    
+    fclose(fp);
+    free(line);
+}
+} // namespace
+
+// Server mode implementation using async pipeline
+int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running, bool enable_stats) {
+    std::cout << "Starting server mode with async pipeline...\n";
+    
+    try {
+        // Create TEXT_ONLY pipeline (LLM only: Text → LLM → Text)
+        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::TEXT_ONLY, enable_stats);
+        if (!pipeline) {
+            std::cerr << "Failed to create TEXT_ONLY pipeline\n";
+            return 1;
+        }
+        
+        // Start the pipeline
+        if (!pipeline->start()) {
+            std::cerr << "Failed to start pipeline\n";
+            return 1;
+        }
+        
+        std::cout << "Pipeline started in TEXT_ONLY mode (LLM processing only)\n";
+        
+        // Create server socket
+        int listen_fd = create_and_listen(socketPath);
+        if (listen_fd < 0) {
+            pipeline->stop();
+            return 1;
+        }
+        
+        std::cout << "Server listening on " << socketPath << std::endl;
+        std::cout << "Send JSON requests: {\"prompt\": \"your text here\"}\n\n";
+        
+        std::vector<std::thread> workers;
+        while (keep_running && pipeline->is_running()) {
+            int client_fd = ::accept(listen_fd, nullptr, nullptr);
+            if (client_fd < 0) {
+                if (errno == EINTR) continue;
+                std::perror("accept");
+                break;
+            }
+            
+            // Handle each client in a separate thread using the pipeline
+            workers.emplace_back([client_fd, &pipeline]() mutable {
+                handle_client_with_pipeline(client_fd, *pipeline);
+            });
+            // detach to avoid accumulating join() responsibilities
+            workers.back().detach();
+        }
+        
+        ::close(listen_fd);
+        ::unlink(socketPath.c_str());
+        
+        // Stop pipeline
+        pipeline->stop();
+        
+        std::cout << "Server stopped.\n";
+        return 0;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Server error: " << e.what() << std::endl;
+        return 1;
+    }
 }

@@ -14,6 +14,10 @@ public:
     /// Generate a response to the input prompt
     bool generate(const std::string &prompt, std::string &response) override;
 
+    /// Async generate with text chunk callback for TTS streaming
+    bool generate_async(const std::string &prompt, std::string &response, 
+                       std::function<void(const std::string&)> callback) override;
+
     /// Release resources
     void shutdown() override;
 

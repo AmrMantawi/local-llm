@@ -15,25 +15,27 @@
       }
     },
     "tts": {
-      "paroli_encoder": {
-        "path": "../models/tts/encoder.onnx",
-        "type": "paroli",
-        "description": "Paroli encoder model (ONNX)"
-      },
-      "paroli_decoder": {
-        "path": "../models/tts/decoder.onnx",
-        "type": "paroli",
-        "description": "Paroli decoder model (ONNX)"
-      },
-      "paroli_config": {
-        "path": "../models/tts/config.json",
-        "type": "paroli",
-        "description": "Paroli model configuration JSON"
-      },
-      "paroli_espeak_data": {
-        "path": "../models/tts/piper_phonemize/share/espeak-ng-data",
-        "type": "paroli",
-        "description": "eSpeak NG data directory required by Paroli"
+      "paroli": {
+        "encoder": {
+          "path": "../models/tts/encoder.onnx",
+          "type": "paroli",
+          "description": "Paroli encoder model (ONNX)"
+        },
+        "decoder": {
+          "path": "../models/tts/decoder.onnx",
+          "type": "paroli",
+          "description": "Paroli decoder model (ONNX)"
+        },
+        "config": {
+          "path": "../models/tts/config.json",
+          "type": "paroli",
+          "description": "Paroli model configuration JSON"
+        },
+        "espeak_data": {
+          "path": "../models/tts/piper_phonemize/share/espeak-ng-data",
+          "type": "paroli",
+          "description": "eSpeak NG data directory required by Paroli"
+        }
       }
     }
   },
@@ -43,10 +45,6 @@
       "buffer_ms": 30000,
       "vad_threshold": 0.6,
       "vad_capture_ms": 10000
-    },
-    "tts": {
-      "voice_id": 2,
-      "speak_script": "scripts/speak"
     }
   }
 } 

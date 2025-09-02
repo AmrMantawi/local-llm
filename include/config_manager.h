@@ -3,49 +3,7 @@
 #include <string>
 #include <optional>
 
-#ifdef DISABLE_JSON_CONFIG
-// Stub implementation when JSON is disabled
-class ConfigManager {
-public:
-    static ConfigManager& getInstance() {
-        static ConfigManager instance;
-        return instance;
-    }
-    
-    bool loadConfig(const std::string& configPath) { return false; }
-    
-    std::string getModelPath(const std::string& category, const std::string& type) const {
-        // Return default paths when JSON is disabled
-        if (category == "stt" && type == "whisper") {
-            return "../third_party/whisper.cpp/models/ggml-base.en.bin";
-        } else if (category == "llm" && type == "llama") {
-            return "../models/llm/jan-nano-4b-Q3_K_M.gguf";
-        } else if (category == "tts" && type == "piper") {
-            return "../models/tts/en_US-lessac-medium.onnx";
-        } else if (category == "tts" && type == "paroli_encoder") {
-            return "../models/tts/paroli/encoder.onnx";
-        } else if (category == "tts" && type == "paroli_decoder") {
-            return "../models/tts/paroli/decoder.onnx";
-        } else if (category == "tts" && type == "paroli_config") {
-            return "../models/tts/paroli/config.json";
-        } else if (category == "tts" && type == "paroli_espeak_data") {
-            return "../models/tts/paroli/espeak-ng-data";
-        }
-        return "";
-    }
-    
-    int getAudioSampleRate() const { return 16000; }
-    int getAudioBufferMs() const { return 30000; }
-    float getVadThreshold() const { return 0.6f; }
-    int getVadCaptureMs() const { return 10000; }
-    int getTtsVoiceId() const { return 2; }
-    std::string getTtsSpeakScript() const { return "../scripts/speak"; }
-    
-private:
-    ConfigManager() = default;
-};
-#else
-// Full JSON implementation
+// JSON-based configuration manager
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
@@ -92,6 +50,74 @@ public:
         }
     }
     
+    std::string getNestedModelPath(const std::string& category, const std::string& backend, const std::string& component) const {
+        try {
+            std::string pathFromConfig = config["models"][category][backend][component]["path"].get<std::string>();
+            std::filesystem::path p(pathFromConfig);
+            if (p.is_relative() && !configDirectory_.empty()) {
+                p = std::filesystem::path(configDirectory_) / p;
+            }
+            return p.string();
+        } catch (const std::exception& e) {
+            std::cerr << "Error getting nested model path for " << category << "/" << backend << "/" << component << ": " << e.what() << std::endl;
+            return "";
+        }
+    }
+    
+    // Generalized backend-aware model getters
+    std::string getSTTModelPath() const {
+#ifdef USE_WHISPER
+        return getModelPath("stt", "whisper");
+#else
+        std::cerr << "Error: No STT backend enabled at compile time" << std::endl;
+        return "";
+#endif
+    }
+    
+    std::string getLLMModelPath() const {
+#ifdef USE_LLAMA
+        return getModelPath("llm", "llama");
+#else
+        std::cerr << "Error: No LLM backend enabled at compile time" << std::endl;
+        return "";
+#endif
+    }
+    
+    std::string getTTSModelPath(const std::string& component = "") const {
+#ifdef USE_Paroli
+        if (component.empty()) {
+            // Return encoder path as the primary model
+            return getNestedModelPath("tts", "paroli", "encoder");
+        } else {
+            return getNestedModelPath("tts", "paroli", component);
+        }
+#else
+        std::cerr << "Error: No TTS backend enabled at compile time" << std::endl;
+        return "";
+#endif
+    }
+    
+    // Get all Paroli TTS model paths (for backends that need multiple files)
+    struct ParoliPaths {
+        std::string encoder;
+        std::string decoder;
+        std::string config;
+        std::string espeak_data;
+    };
+    
+    ParoliPaths getParoliModelPaths() const {
+        ParoliPaths paths;
+#ifdef USE_Paroli
+        paths.encoder = getNestedModelPath("tts", "paroli", "encoder");
+        paths.decoder = getNestedModelPath("tts", "paroli", "decoder");
+        paths.config = getNestedModelPath("tts", "paroli", "config");
+        paths.espeak_data = getNestedModelPath("tts", "paroli", "espeak_data");
+#else
+        std::cerr << "Error: Paroli TTS backend not enabled at compile time" << std::endl;
+#endif
+        return paths;
+    }
+    
     int getAudioSampleRate() const {
         try {
             return config["settings"]["audio"]["sample_rate"].get<int>();
@@ -123,26 +149,8 @@ public:
             return 10000; // default
         }
     }
-    
-    int getTtsVoiceId() const {
-        try {
-            return config["settings"]["tts"]["voice_id"].get<int>();
-        } catch (const std::exception& e) {
-            return 2; // default
-        }
-    }
-    
-    std::string getTtsSpeakScript() const {
-        try {
-            return config["settings"]["tts"]["speak_script"].get<std::string>();
-        } catch (const std::exception& e) {
-            return "../scripts/speak"; // default
-        }
-    }
-    
 private:
     ConfigManager() = default;
     nlohmann::json config;
     std::string configDirectory_;
-};
-#endif 
+}; 

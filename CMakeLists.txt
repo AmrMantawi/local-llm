@@ -22,8 +22,7 @@ if(NOT nlohmann_json_FOUND)
 endif()
 
 if(NOT nlohmann_json_FOUND)
-    message(WARNING "nlohmann/json not found. Configuration file loading will be disabled.")
-    add_compile_definitions(DISABLE_JSON_CONFIG)
+    message(FATAL_ERROR "nlohmann/json is required for configuration file loading.")
 endif()
 
 # set(CMAKE_BUILD_TYPE Debug)
@@ -32,10 +31,10 @@ endif()
 option(USE_WHISPER   "Enable whisper.cpp for STT"   ON)
 option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
 option(USE_LLAMA     "Enable llama.cpp for LLM"     ON)
-option(USE_Piper     "Enable Piper for TTS"         OFF)
 option(USE_Paroli    "Enable Paroli for TTS"        ON)
 
 find_package(SDL2 REQUIRED)
+find_package(ALSA REQUIRED)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -43,7 +42,8 @@ set(SOURCES
     src/main.cpp
     src/common-sdl.cpp
     src/common.cpp
-    src/server.cpp
+    src/async_pipeline_factory.cpp
+    src/async_processors.cpp
 )
 
 if(USE_WHISPER)
@@ -79,7 +79,7 @@ if(USE_Paroli)
     if(NOT EXISTS "${DEFAULT_PIPER_PHONEMIZE_ROOT}/include")
         set(DEFAULT_PIPER_PHONEMIZE_ROOT "/usr")
     endif()
-    set(PIPER_PHONEMIZE_ROOT "${DEFAULT_PIPER_PHONEMIZE_ROOT}" CACHE STRING "Path to piper-phonemize root directory")
+    set(PIPER_PHONEMIZE_ROOT "${DEFAULT_PIPER_PHONEMIZE_ROOT}" CACHE STRING "Path to piper-phonemize root directory (used by Paroli)")
 
     # Ensure CMake can find custom Find*.cmake modules provided by paroli-daemon
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/cmake")
@@ -92,11 +92,7 @@ if(USE_Paroli)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/paroli-daemon)
 endif()
 
-if(USE_Piper)
-    add_compile_definitions(TTS_BACKEND=TTSPiper)
-    add_definitions(-DUSE_Piper)
-    list(APPEND SOURCES src/tts_piper.cpp)
-elseif(USE_Paroli)
+if(USE_Paroli)
     add_compile_definitions(TTS_BACKEND=TTSParoli)
     add_definitions(-DUSE_Paroli)
     list(APPEND SOURCES src/tts_paroli.cpp)
@@ -105,8 +101,8 @@ else()
 endif()
 
 add_executable(local-llm ${SOURCES})
-target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${nlohmann_json_INCLUDE_DIRS})
-# Ensure Paroli headers (and ORT/Piper-phonemize headers) are visible when compiling local sources
+target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${ALSA_INCLUDE_DIRS} ${nlohmann_json_INCLUDE_DIRS})
+# Ensure Paroli headers (and ORT/piper-phonemize headers) are visible when compiling local sources
 if(USE_Paroli)
     target_include_directories(local-llm PRIVATE
         ${ORT_ROOT}/include
@@ -114,7 +110,7 @@ if(USE_Paroli)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/paroli-daemon)
 endif()
-target_link_libraries(local-llm PRIVATE whisper llama ${EXTRA_LIBS} ${SDL2_LIBRARIES} pthread)
+target_link_libraries(local-llm PRIVATE whisper llama ${EXTRA_LIBS} ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} pthread)
 if(USE_Paroli)
     # Ensure ONNX Runtime is linked and library paths are available to the final executable
     target_link_directories(local-llm PRIVATE ${ORT_ROOT}/lib ${PIPER_PHONEMIZE_ROOT}/lib)
