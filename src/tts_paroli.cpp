@@ -22,7 +22,7 @@ bool TTSParoli::init() {
     encoder_path = paroli_paths.encoder;
     decoder_path = paroli_paths.decoder;
     config_path = paroli_paths.config;
-    espeak_data_path = paroli_paths.espeak_data;
+    espeak_data_path = "deps/piper_phonemize/share/espeak-ng-data";
     
     // Check if model files exist
     if (!std::filesystem::exists(encoder_path)) {

@@ -8,10 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 function(detect_platform)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set(PLATFORM_OS "linux" PARENT_SCOPE)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(PLATFORM_OS "win" PARENT_SCOPE)
     else()
-        message(FATAL_ERROR "Unsupported OS: ${CMAKE_SYSTEM_NAME}. Only Linux and Windows are supported.")
+        message(FATAL_ERROR "Unsupported OS: ${CMAKE_SYSTEM_NAME}. Only Linux is supported.")
     endif()
     
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
@@ -38,12 +36,6 @@ function(download_onnxruntime)
         elseif(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "arm64")
             set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
             set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
-        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "x64")
-            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-win-x64-${ORT_VERSION}.zip")
-            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-win-x64-${ORT_VERSION}.zip")
-        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "arm64")
-            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-win-arm64-${ORT_VERSION}.zip")
-            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-win-arm64-${ORT_VERSION}.zip")
         else()
             message(FATAL_ERROR "Unsupported platform ${PLATFORM_OS}-${PLATFORM_ARCH} for ONNX Runtime auto-download")
         endif()
@@ -58,18 +50,11 @@ function(download_onnxruntime)
         list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
         
         if(DOWNLOAD_RESULT EQUAL 0)
-            # Extract the archive based on platform
-            if(PLATFORM_OS STREQUAL "linux")
-                execute_process(
-                    COMMAND tar -xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
-                    RESULT_VARIABLE EXTRACT_RESULT
-                )
-            elseif(PLATFORM_OS STREQUAL "win")
-                execute_process(
-                    COMMAND ${CMAKE_COMMAND} -E tar xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
-                    RESULT_VARIABLE EXTRACT_RESULT
-                )
-            endif()
+            # Extract the archive (Linux uses .tgz files)
+            execute_process(
+                COMMAND tar -xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                RESULT_VARIABLE EXTRACT_RESULT
+            )
             
             if(EXTRACT_RESULT EQUAL 0)
                 # Clean up the archive
@@ -102,12 +87,6 @@ function(download_piper_phonemize)
         elseif(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "arm64")
             set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_linux_aarch64.tar.gz")
             set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_linux_aarch64.tar.gz")
-        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "x64")
-            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_windows_amd64.zip")
-            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_windows_amd64.zip")
-        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "arm64")
-            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_windows_arm64.zip")
-            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_windows_arm64.zip")
         else()
             message(FATAL_ERROR "Unsupported platform ${PLATFORM_OS}-${PLATFORM_ARCH} for piper-phonemize auto-download")
         endif()
@@ -122,18 +101,11 @@ function(download_piper_phonemize)
         list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
         
         if(DOWNLOAD_RESULT EQUAL 0)
-            # Extract the archive based on platform
-            if(PLATFORM_OS STREQUAL "linux")
-                execute_process(
-                    COMMAND tar -xzf "${PIPER_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
-                    RESULT_VARIABLE EXTRACT_RESULT
-                )
-            elseif(PLATFORM_OS STREQUAL "win")
-                execute_process(
-                    COMMAND ${CMAKE_COMMAND} -E tar xzf "${PIPER_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
-                    RESULT_VARIABLE EXTRACT_RESULT
-                )
-            endif()
+            # Extract the archive (Linux uses .tar.gz files)
+            execute_process(
+                COMMAND tar -xzf "${PIPER_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                RESULT_VARIABLE EXTRACT_RESULT
+            )
             
             if(EXTRACT_RESULT EQUAL 0)
                 # Clean up the archive

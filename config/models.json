@@ -30,11 +30,6 @@
           "path": "../models/tts/config.json",
           "type": "paroli",
           "description": "Paroli model configuration JSON"
-        },
-        "espeak_data": {
-          "path": "../models/tts/piper_phonemize/share/espeak-ng-data",
-          "type": "paroli",
-          "description": "eSpeak NG data directory required by Paroli"
         }
       }
     }

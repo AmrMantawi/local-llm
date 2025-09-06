@@ -13,6 +13,13 @@ if [ ! -f "CMakeLists.txt" ]; then
     exit 1
 fi
 
+# Check if we're running on Linux
+if [ "$(uname)" != "Linux" ]; then
+    echo "❌ Error: This project only supports Linux compilation"
+    echo "   Please run this script on a Linux system"
+    exit 1
+fi
+
 # Create necessary directories
 echo "📁 Creating directories..."
 mkdir -p build
@@ -24,11 +31,17 @@ mkdir -p sessions
 # Check for required system dependencies
 echo "🔍 Checking system dependencies..."
 
+# Check for C++ compiler
+if ! command -v g++ &> /dev/null && ! command -v clang++ &> /dev/null; then
+    echo "❌ C++ compiler not found. Please install a C++ compiler:"
+    echo "   Ubuntu/Debian: sudo apt-get install build-essential"
+    exit 1
+fi
+
 # Check for CMake
 if ! command -v cmake &> /dev/null; then
     echo "❌ CMake not found. Please install CMake:"
     echo "   Ubuntu/Debian: sudo apt-get install cmake"
-    echo "   macOS: brew install cmake"
     exit 1
 fi
 
@@ -36,47 +49,60 @@ fi
 if ! pkg-config --exists sdl2; then
     echo "❌ SDL2 not found. Please install SDL2:"
     echo "   Ubuntu/Debian: sudo apt-get install libsdl2-dev"
-    echo "   macOS: brew install sdl2"
     exit 1
 fi
 
-# Check for Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 not found. Please install Python 3.7+"
+# Check for ALSA
+if ! pkg-config --exists alsa; then
+    echo "❌ ALSA not found. Please install ALSA development libraries:"
+    echo "   Ubuntu/Debian: sudo apt-get install libasound2-dev"
     exit 1
 fi
 
-# Check for pip
-if ! command -v pip3 &> /dev/null; then
-    echo "❌ pip3 not found. Please install pip"
+# Check for nlohmann/json
+if ! pkg-config --exists nlohmann_json; then
+    # Try to find it manually
+    if [ ! -f "/usr/include/nlohmann/json.hpp" ] && [ ! -f "/usr/local/include/nlohmann/json.hpp" ]; then
+        echo "❌ nlohmann/json not found. Please install nlohmann/json:"
+        echo "   Ubuntu/Debian: sudo apt-get install nlohmann-json3-dev"
+        echo "   Or download header-only version from: https://github.com/nlohmann/json"
+        exit 1
+    fi
+fi
+
+# Check for git (needed for submodules)
+if ! command -v git &> /dev/null; then
+    echo "❌ Git not found. Please install Git:"
+    echo "   Ubuntu/Debian: sudo apt-get install git"
     exit 1
 fi
+
+# Check for make
+if ! command -v make &> /dev/null; then
+    echo "❌ Make not found. Please install Make:"
+    echo "   Ubuntu/Debian: sudo apt-get install build-essential"
+    exit 1
+fi
+
+# Check for tar (needed for dependency extraction)
+if ! command -v tar &> /dev/null; then
+    echo "❌ Tar not found. Please install tar:"
+    echo "   Ubuntu/Debian: sudo apt-get install tar"
+    exit 1
+fi
+
 
 echo "✅ System dependencies OK"
 
 # Initialize git submodules
 echo "📦 Initializing git submodules..."
-git submodule update --init --recursive
-
-# Create virtual environment
-echo "🐍 Setting up Python virtual environment..."
-python3 -m venv venv
-source venv/bin/activate
-
-# Install Python dependencies
-echo "📦 Installing Python dependencies..."
-pip install --upgrade pip
-pip install piper-tts
-
-# Make scripts executable
-echo "🔧 Making scripts executable..."
-chmod +x scripts/speak
+git submodule update --init
+echo "   - Paroli TTS submodule initialized"
 
 # Build the project
 echo "🔨 Building the project..."
-cd build
-cmake ..
-make -j$(nproc)
+make clean
+make build
 
 echo "✅ Setup complete!"
 echo ""

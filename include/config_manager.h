@@ -102,7 +102,6 @@ public:
         std::string encoder;
         std::string decoder;
         std::string config;
-        std::string espeak_data;
     };
     
     ParoliPaths getParoliModelPaths() const {
@@ -111,7 +110,6 @@ public:
         paths.encoder = getNestedModelPath("tts", "paroli", "encoder");
         paths.decoder = getNestedModelPath("tts", "paroli", "decoder");
         paths.config = getNestedModelPath("tts", "paroli", "config");
-        paths.espeak_data = getNestedModelPath("tts", "paroli", "espeak_data");
 #else
         std::cerr << "Error: Paroli TTS backend not enabled at compile time" << std::endl;
 #endif
