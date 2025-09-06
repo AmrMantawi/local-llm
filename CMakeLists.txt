@@ -4,6 +4,154 @@ project(local-llm LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Function to detect OS and architecture for dependency downloads
+function(detect_platform)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(PLATFORM_OS "linux" PARENT_SCOPE)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(PLATFORM_OS "win" PARENT_SCOPE)
+    else()
+        message(FATAL_ERROR "Unsupported OS: ${CMAKE_SYSTEM_NAME}. Only Linux and Windows are supported.")
+    endif()
+    
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        set(PLATFORM_ARCH "x64" PARENT_SCOPE)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+        set(PLATFORM_ARCH "arm64" PARENT_SCOPE)
+    else()
+        message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}. Only x86_64 and arm64 are supported.")
+    endif()
+endfunction()
+
+# Function to download and extract ONNX Runtime
+function(download_onnxruntime)
+    detect_platform()
+    set(ORT_VERSION "1.15.0")
+    set(ORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-${PLATFORM_OS}-${PLATFORM_ARCH}-${ORT_VERSION}")
+    
+    if(NOT EXISTS "${ORT_DIR}/include")
+        message(STATUS "Downloading ONNX Runtime ${ORT_VERSION} for ${PLATFORM_OS}-${PLATFORM_ARCH}")
+        
+        if(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "x64")
+            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz")
+            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-linux-x64-${ORT_VERSION}.tgz")
+        elseif(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "arm64")
+            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
+            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
+        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "x64")
+            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-win-x64-${ORT_VERSION}.zip")
+            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-win-x64-${ORT_VERSION}.zip")
+        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "arm64")
+            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-win-arm64-${ORT_VERSION}.zip")
+            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-win-arm64-${ORT_VERSION}.zip")
+        else()
+            message(FATAL_ERROR "Unsupported platform ${PLATFORM_OS}-${PLATFORM_ARCH} for ONNX Runtime auto-download")
+        endif()
+        
+        # Create deps directory if it doesn't exist
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/deps")
+        
+        # Download the archive using CMake's built-in download
+        file(DOWNLOAD "${ORT_URL}" "${ORT_ARCHIVE}" 
+             STATUS DOWNLOAD_STATUS
+             SHOW_PROGRESS)
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
+        
+        if(DOWNLOAD_RESULT EQUAL 0)
+            # Extract the archive based on platform
+            if(PLATFORM_OS STREQUAL "linux")
+                execute_process(
+                    COMMAND tar -xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                    RESULT_VARIABLE EXTRACT_RESULT
+                )
+            elseif(PLATFORM_OS STREQUAL "win")
+                execute_process(
+                    COMMAND ${CMAKE_COMMAND} -E tar xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                    RESULT_VARIABLE EXTRACT_RESULT
+                )
+            endif()
+            
+            if(EXTRACT_RESULT EQUAL 0)
+                # Clean up the archive
+                file(REMOVE "${ORT_ARCHIVE}")
+                message(STATUS "Successfully downloaded and extracted ONNX Runtime")
+            else()
+                message(FATAL_ERROR "Failed to extract ONNX Runtime archive")
+            endif()
+        else()
+            message(FATAL_ERROR "Failed to download ONNX Runtime from ${ORT_URL}")
+        endif()
+    else()
+        message(STATUS "ONNX Runtime already available at ${ORT_DIR}")
+    endif()
+    
+    set(ORT_ROOT "${ORT_DIR}" PARENT_SCOPE)
+endfunction()
+
+# Function to download and extract piper-phonemize
+function(download_piper_phonemize)
+    detect_platform()
+    set(PIPER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper_phonemize")
+    
+    if(NOT EXISTS "${PIPER_DIR}/include")
+        message(STATUS "Downloading piper-phonemize for ${PLATFORM_OS}-${PLATFORM_ARCH}")
+        
+        if(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "x64")
+            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_linux_x86_64.tar.gz")
+            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_linux_x86_64.tar.gz")
+        elseif(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "arm64")
+            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_linux_aarch64.tar.gz")
+            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_linux_aarch64.tar.gz")
+        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "x64")
+            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_windows_amd64.zip")
+            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_windows_amd64.zip")
+        elseif(PLATFORM_OS STREQUAL "win" AND PLATFORM_ARCH STREQUAL "arm64")
+            set(PIPER_URL "https://github.com/rhasspy/piper-phonemize/releases/download/2023.11.14-4/piper-phonemize_windows_arm64.zip")
+            set(PIPER_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/piper-phonemize_windows_arm64.zip")
+        else()
+            message(FATAL_ERROR "Unsupported platform ${PLATFORM_OS}-${PLATFORM_ARCH} for piper-phonemize auto-download")
+        endif()
+        
+        # Create deps directory if it doesn't exist
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/deps")
+        
+        # Download the archive using CMake's built-in download
+        file(DOWNLOAD "${PIPER_URL}" "${PIPER_ARCHIVE}" 
+             STATUS DOWNLOAD_STATUS
+             SHOW_PROGRESS)
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
+        
+        if(DOWNLOAD_RESULT EQUAL 0)
+            # Extract the archive based on platform
+            if(PLATFORM_OS STREQUAL "linux")
+                execute_process(
+                    COMMAND tar -xzf "${PIPER_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                    RESULT_VARIABLE EXTRACT_RESULT
+                )
+            elseif(PLATFORM_OS STREQUAL "win")
+                execute_process(
+                    COMMAND ${CMAKE_COMMAND} -E tar xzf "${PIPER_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
+                    RESULT_VARIABLE EXTRACT_RESULT
+                )
+            endif()
+            
+            if(EXTRACT_RESULT EQUAL 0)
+                # Clean up the archive
+                file(REMOVE "${PIPER_ARCHIVE}")
+                message(STATUS "Successfully downloaded and extracted piper-phonemize")
+            else()
+                message(FATAL_ERROR "Failed to extract piper-phonemize archive")
+            endif()
+        else()
+            message(FATAL_ERROR "Failed to download piper-phonemize from ${PIPER_URL}")
+        endif()
+    else()
+        message(STATUS "piper-phonemize already available at ${PIPER_DIR}")
+    endif()
+    
+    set(PIPER_PHONEMIZE_ROOT "${PIPER_DIR}" PARENT_SCOPE)
+endfunction()
+
 # Find nlohmann/json
 find_package(nlohmann_json 3.2.0 QUIET)
 if(NOT nlohmann_json_FOUND)
@@ -68,18 +216,13 @@ endif()
 
 # Add paroli-daemon subdirectory if using Paroli TTS
 if(USE_Paroli)
-    # Prefer bundled runtimes in models/tts if available
-    set(DEFAULT_ORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/models/tts/onnxruntime-linux-x64-1.14.1")
-    if(NOT EXISTS "${DEFAULT_ORT_ROOT}/include")
-        set(DEFAULT_ORT_ROOT "/usr")
-    endif()
-    set(ORT_ROOT "${DEFAULT_ORT_ROOT}" CACHE STRING "Path to ONNX Runtime root directory")
-
-    set(DEFAULT_PIPER_PHONEMIZE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/models/tts/piper_phonemize")
-    if(NOT EXISTS "${DEFAULT_PIPER_PHONEMIZE_ROOT}/include")
-        set(DEFAULT_PIPER_PHONEMIZE_ROOT "/usr")
-    endif()
-    set(PIPER_PHONEMIZE_ROOT "${DEFAULT_PIPER_PHONEMIZE_ROOT}" CACHE STRING "Path to piper-phonemize root directory (used by Paroli)")
+    # Automatically download ONNX Runtime and piper-phonemize if not available
+    download_onnxruntime()
+    download_piper_phonemize()
+    
+    # Set the paths (these are set by the download functions)
+    set(ORT_ROOT "${ORT_ROOT}" CACHE STRING "Path to ONNX Runtime root directory")
+    set(PIPER_PHONEMIZE_ROOT "${PIPER_PHONEMIZE_ROOT}" CACHE STRING "Path to piper-phonemize root directory (used by Paroli)")
 
     # Ensure CMake can find custom Find*.cmake modules provided by paroli-daemon
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/cmake")

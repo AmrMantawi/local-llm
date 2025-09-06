@@ -4,6 +4,7 @@
 /models/
 /venv/
 /sessions/
+/deps/
 
 # IDE / editor settings
 .vscode/
