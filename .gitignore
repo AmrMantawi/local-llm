@@ -19,6 +19,7 @@
 *.dylib
 *.dll
 *.exe
+.cache/
 
 # OS generated files
 .DS_Store
