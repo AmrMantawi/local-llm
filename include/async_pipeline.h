@@ -8,8 +8,6 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
-#include <memory>
-#include <functional>
 #include <iostream>
 
 namespace async_pipeline {
@@ -19,6 +17,14 @@ class STTProcessor;
 class LLMProcessor;
 class TTSProcessor;
 class PipelineManager;
+
+enum class PopResult {
+    SUCCESS,        // Item successfully popped
+    EMPTY,          // Queue is empty
+    SHUTDOWN,       // Queue is shutting down
+    INTERRUPTED,    // External interrupt requested
+    TIMEOUT         // Timeout exceeded
+};
 
 struct TextMessage {
     std::string text;
@@ -67,7 +73,8 @@ struct ControlMessage {
 template<typename T>
 class SafeQueue {
 public:
-    explicit SafeQueue(size_t max_size = 100) : max_size_(max_size), shutdown_(false) {}
+    explicit SafeQueue(size_t max_size = 100, std::atomic<bool>* external_interrupt_flag = nullptr) 
+        : max_size_(max_size), shutdown_(false), external_interrupt_flag_(external_interrupt_flag) {}
     
     ~SafeQueue() {
         shutdown();
@@ -110,49 +117,55 @@ public:
         return true;
     }
 
-    // Pop with timeout - returns false if queue is empty and timeout exceeded
-    bool pop(T& item, std::chrono::milliseconds timeout = std::chrono::milliseconds(100)) {
+    // Pop with timeout - returns PopResult indicating success or failure reason
+    PopResult pop(T& item, std::chrono::milliseconds timeout = std::chrono::milliseconds(100)) {
         std::unique_lock<std::mutex> lock(mutex_);
         
         if (!not_empty_.wait_for(lock, timeout, [this] { 
-            return !queue_.empty() || shutdown_; 
+            return !queue_.empty() || shutdown_ || external_interrupt_requested(); 
         })) {
-            return false; // Timeout
+            return PopResult::TIMEOUT;
         }
         
-        if (shutdown_ && queue_.empty()) return false;
+        if (shutdown_) return PopResult::SHUTDOWN;
+        if (external_interrupt_requested()) return PopResult::INTERRUPTED;
+        if (queue_.empty()) return PopResult::EMPTY;
         
         item = std::move(queue_.front());
         queue_.pop();
         not_full_.notify_one();
-        return true;
+        return PopResult::SUCCESS;
     }
     
     // Blocking pop - waits indefinitely until item available or shutdown
-    bool pop_blocking(T& item) {
+    PopResult pop_blocking(T& item) {
         std::unique_lock<std::mutex> lock(mutex_);
         
         not_empty_.wait(lock, [this] { 
-            return !queue_.empty() || shutdown_; 
+            return !queue_.empty() || shutdown_ || external_interrupt_requested(); 
         });
         
-        if (shutdown_ && queue_.empty()) return false;
+        if (shutdown_) return PopResult::SHUTDOWN;
+        if (external_interrupt_requested()) return PopResult::INTERRUPTED;
+        if (queue_.empty()) return PopResult::EMPTY;
         
         item = std::move(queue_.front());
         queue_.pop();
         not_full_.notify_one();
-        return true;
+        return PopResult::SUCCESS;
     }
     
     // Non-blocking pop
-    bool try_pop(T& item) {
+    PopResult try_pop(T& item) {
         std::unique_lock<std::mutex> lock(mutex_);
-        if (queue_.empty() || shutdown_) return false;
+        if (shutdown_) return PopResult::SHUTDOWN;
+        if (external_interrupt_requested()) return PopResult::INTERRUPTED;
+        if (queue_.empty()) return PopResult::EMPTY;
         
         item = std::move(queue_.front());
         queue_.pop();
         not_full_.notify_one();
-        return true;
+        return PopResult::SUCCESS;
     }
     
     size_t size() const {
@@ -198,10 +211,15 @@ private:
     std::condition_variable not_full_;
     size_t max_size_;
     std::atomic<bool> shutdown_;
+    std::atomic<bool>* external_interrupt_flag_;
+    
+    bool external_interrupt_requested() const {
+        return external_interrupt_flag_ && external_interrupt_flag_->load(std::memory_order_acquire);
+    }
 };
 
 /**
- * Base processor class with common thread management
+ * Base processor class with common thread management and signal-based control
  */
 class BaseProcessor {
 public:
@@ -226,6 +244,10 @@ public:
         if (!running_) return;
         
         running_ = false;
+        
+        // Signal any waiting threads to wake up
+        signal_control(ControlMessage(ControlMessage::SHUTDOWN));
+        
         if (thread_.joinable()) {
             thread_.join();
         }
@@ -235,20 +257,49 @@ public:
     bool is_running() const { return running_; }
     const std::string& name() const { return name_; }
     
-    // Interruption support
-    virtual void interrupt() {
-        std::lock_guard<std::mutex> lock(interrupt_mutex_);
-        interrupt_requested_ = true;
+    // Signal-based control system
+    void signal_control(const ControlMessage& msg) {
+        {
+            std::lock_guard<std::mutex> lock(control_mutex_);
+            control_queue_.push(msg);
+        }
+        control_signal_.notify_one(); // Wake up processor immediately
+        
+        std::cout << "[" << name_ << "] Control signal received: " << control_type_to_string(msg.type) << std::endl;
     }
     
-    virtual void clear_interrupt() {
-        std::lock_guard<std::mutex> lock(interrupt_mutex_);
-        interrupt_requested_ = false;
+    // Check for immediate control signals (non-blocking)
+    bool check_control_signal(ControlMessage& msg) {
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        if (!control_queue_.empty()) {
+            msg = control_queue_.front();
+            control_queue_.pop();
+            return true;
+        }
+        return false;
+    }
+    
+    // Wait for control signal with timeout (interruptible sleep)
+    bool wait_for_control_or_timeout(ControlMessage& msg, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(control_mutex_);
+        if (control_signal_.wait_for(lock, timeout, [this] { return !control_queue_.empty() || !running_; })) {
+            if (!control_queue_.empty()) {
+                msg = control_queue_.front();
+                control_queue_.pop();
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    // Legacy interruption support (deprecated - use signal_control instead)
+    virtual void interrupt() {
+        signal_control(ControlMessage(ControlMessage::INTERRUPT));
     }
     
     bool is_interrupt_requested() const {
-        std::lock_guard<std::mutex> lock(interrupt_mutex_);
-        return interrupt_requested_;
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        return !control_queue_.empty() && control_queue_.front().type == ControlMessage::INTERRUPT;
     }
     
     // Get processing statistics
@@ -256,6 +307,8 @@ public:
         uint64_t messages_processed = 0;
         std::chrono::milliseconds avg_processing_time{0};
         std::chrono::steady_clock::time_point last_activity;
+        uint64_t control_signals_received = 0;
+        std::chrono::microseconds avg_control_response_time{0};
     };
     
     Stats get_stats() const {
@@ -269,7 +322,12 @@ protected:
     virtual void process() = 0;
     virtual void cleanup() {}
     
-    // Main thread loop
+    // Override to handle specific control messages immediately
+    virtual bool handle_control_message(const ControlMessage& /*msg*/) {
+        return false; // Return true if handled, false to continue with default processing
+    }
+    
+    // Main thread loop with signal-based control
     void run() {
         while (running_) {
             try {
@@ -291,12 +349,23 @@ protected:
                 
             } catch (const std::exception& e) {
                 // Log error but continue processing
-                // TODO: Add proper logging
                 std::cerr << "[" << name_ << "] Processing error: " << e.what() << std::endl;
                 
                 // Brief sleep to avoid tight error loops
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+        }
+    }
+    
+    // Convert control message type to string for logging
+    std::string control_type_to_string(ControlMessage::Type type) const {
+        switch (type) {
+            case ControlMessage::INTERRUPT: return "INTERRUPT";
+            case ControlMessage::FLUSH_QUEUES: return "FLUSH_QUEUES";
+            case ControlMessage::PAUSE: return "PAUSE";
+            case ControlMessage::RESUME: return "RESUME";
+            case ControlMessage::SHUTDOWN: return "SHUTDOWN";
+            default: return "UNKNOWN";
         }
     }
     
@@ -310,8 +379,10 @@ private:
     mutable std::mutex stats_mutex_;
     Stats stats_;
     
-    mutable std::mutex interrupt_mutex_;
-    std::atomic<bool> interrupt_requested_{false};
+    // Signal-based control system
+    mutable std::mutex control_mutex_;
+    std::condition_variable control_signal_;
+    std::queue<ControlMessage> control_queue_;
 };
 
 } // namespace async_pipeline
