@@ -4,10 +4,9 @@
 namespace async_pipeline {
 
 // STTProcessor implementation
-STTProcessor::STTProcessor(SafeQueue<TextMessage>& output_queue,
-                           SafeQueue<ControlMessage>& control_queue, std::unique_ptr<ISTT> stt_backend)
+STTProcessor::STTProcessor(SafeQueue<TextMessage>& output_queue, std::unique_ptr<ISTT> stt_backend)
     : BaseProcessor("STTProcessor"), output_queue_(output_queue),
-      control_queue_(control_queue), stt_(std::move(stt_backend)), audio_(nullptr),
+      stt_(std::move(stt_backend)), audio_(nullptr),
       is_in_speech_sequence_(false) {
 }
 
@@ -59,43 +58,42 @@ bool STTProcessor::initialize() {
     return true;
 }
 
+bool STTProcessor::handle_control_message(const ControlMessage& msg) {
+    if (msg.type == ControlMessage::INTERRUPT || 
+        msg.type == ControlMessage::FLUSH_QUEUES) {
+        // Flush our output queue
+        size_t flushed = output_queue_.flush();
+        if (flushed > 0) {
+            std::cout << "[STTProcessor] Flushed " << flushed << " pending text messages" << std::endl;
+        }
+        return true; // Handled
+    }
+    return false; // Not handled, use default behavior
+}
+
 void STTProcessor::process() {
     // Check if we should stop processing
     if (!is_running()) {
         return;
     }
     
-    // Check for control messages first
-    ControlMessage control_msg(ControlMessage::INTERRUPT);
-    if (control_queue_.try_pop(control_msg)) {
-        if (control_msg.type == ControlMessage::INTERRUPT || 
-            control_msg.type == ControlMessage::FLUSH_QUEUES) {
-            // Flush our output queue
-            size_t flushed = output_queue_.flush();
-            if (flushed > 0) {
-                std::cout << "[STTProcessor] Flushed " << flushed << " pending text messages" << std::endl;
-            }
-            // Forward interrupt signal to downstream processors
-            control_queue_.push(std::move(control_msg), std::chrono::milliseconds(10));
-            return;
-        }
-    }
-    
     if (!audio_) {
         std::cerr << "[STTProcessor] WARNING: audio_ is null!" << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Use interruptible sleep instead of fixed sleep
+        ControlMessage control_msg(ControlMessage::INTERRUPT);
+        wait_for_control_or_timeout(control_msg, std::chrono::milliseconds(100));
         return;
     }
     
     std::vector<float> audio;
     
-    // Sleep to avoid busy loop - this is needed for continuous audio monitoring
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    
-    // Get recent audio for VAD analysis
+    // Get recent audio for VAD analysis with interruptible sleep
     audio_->get(vad_pre_window_ms_, audio);
     
     if (audio.empty()) {
+        // No audio available, use interruptible sleep
+        ControlMessage control_msg(ControlMessage::INTERRUPT);
+        wait_for_control_or_timeout(control_msg, std::chrono::milliseconds(50));
         return;
     }
     
@@ -122,10 +120,12 @@ void STTProcessor::process() {
                 // Create text message
                 TextMessage text_msg(transcribed_text);
                 
-                // Push to output queue
-                if (!output_queue_.push(std::move(text_msg), std::chrono::milliseconds(500))) {
-                    std::cerr << "[STTProcessor] Failed to push text message (queue full)" << std::endl;
+                // Push to output queue with blocking push to handle queue full situations
+                if (!output_queue_.push_blocking(std::move(text_msg))) {
+                    // Queue was shut down, stop processing
+                    return;
                 } else {
+                    mark_processed();
                     std::cout << "[STTProcessor] → " << transcribed_text << std::endl;
                 }
             }
@@ -150,9 +150,12 @@ void STTProcessor::cleanup() {
 
 // LLMProcessor implementation
 LLMProcessor::LLMProcessor(SafeQueue<TextMessage>& input_queue, SafeQueue<TextMessage>& output_queue,
-                           SafeQueue<ControlMessage>& control_queue, std::unique_ptr<ILLM> llm_backend)
+                           std::unique_ptr<ILLM> llm_backend,
+                           SafeQueue<TextMessage>* alt_input_queue,
+                           SafeQueue<TextMessage>* alt_output_queue)
     : BaseProcessor("LLMProcessor"), input_queue_(input_queue), output_queue_(output_queue),
-      control_queue_(control_queue), llm_(std::move(llm_backend)) {
+      alt_input_queue_(alt_input_queue), alt_output_queue_(alt_output_queue),
+      llm_(std::move(llm_backend)) {
 }
 
 bool LLMProcessor::initialize() {
@@ -174,32 +177,43 @@ bool LLMProcessor::initialize() {
     return true;
 }
 
+bool LLMProcessor::handle_control_message(const ControlMessage& msg) {
+    if (msg.type == ControlMessage::INTERRUPT || 
+        msg.type == ControlMessage::FLUSH_QUEUES) {
+        // Flush input and output queues
+        size_t input_flushed = input_queue_.flush();
+        size_t output_flushed = output_queue_.flush();
+        
+        // Flush alt queues if they exist
+        size_t alt_input_flushed = 0;
+        size_t alt_output_flushed = 0;
+        if (alt_input_queue_) {
+            alt_input_flushed = alt_input_queue_->flush();
+        }
+        if (alt_output_queue_) {
+            alt_output_flushed = alt_output_queue_->flush();
+        }
+        
+        if (input_flushed > 0 || output_flushed > 0 || alt_input_flushed > 0 || alt_output_flushed > 0) {
+            std::cout << "[LLMProcessor] Flushed " << input_flushed << " input, " 
+                      << output_flushed << " output, " << alt_input_flushed << " alt input, "
+                      << alt_output_flushed << " alt output messages" << std::endl;
+        }
+        return true; // Handled
+    }
+    return false; // Not handled, use default behavior
+}
+
 void LLMProcessor::process() {
     // Check if we should stop processing
     if (!is_running()) {
         return;
     }
     
-    // Check for control messages first
-    ControlMessage control_msg(ControlMessage::INTERRUPT);
-    if (control_queue_.try_pop(control_msg)) {
-        if (control_msg.type == ControlMessage::INTERRUPT || 
-            control_msg.type == ControlMessage::FLUSH_QUEUES) {
-            // Flush input and output queues
-            size_t input_flushed = input_queue_.flush();
-            size_t output_flushed = output_queue_.flush();
-            if (input_flushed > 0 || output_flushed > 0) {
-                std::cout << "[LLMProcessor] Flushed " << input_flushed << " input and " 
-                          << output_flushed << " output messages" << std::endl;
-            }
-            // Forward interrupt signal to downstream processors
-            control_queue_.push(std::move(control_msg), std::chrono::milliseconds(10));
-            return;
-        }
-    }
-    
     TextMessage input_msg;
-    if (input_queue_.try_pop(input_msg)) {
+    PopResult result = input_queue_.pop_blocking(input_msg);
+    
+    if (result == PopResult::SUCCESS) {
         std::cout << "[LLMProcessor] Processing: " << input_msg.text << std::endl;
         
         // Generate response
@@ -209,10 +223,12 @@ void LLMProcessor::process() {
                 // Create response message
                 TextMessage response_msg(text_chunk);
                 
-                // Push to output queue
-                if (!output_queue_.push(std::move(response_msg), std::chrono::milliseconds(1000))) {
-                    std::cerr << "[LLMProcessor] Failed to push response message (queue full)" << std::endl;
+                // Push to output queue with blocking push
+                if (!output_queue_.push_blocking(std::move(response_msg))) {
+                    // Queue was shut down, stop processing
+                    return;
                 } else {
+                    mark_processed();
                     std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
                 }
             });
@@ -220,9 +236,12 @@ void LLMProcessor::process() {
         if (!success) {
             std::cerr << "[LLMProcessor] Failed to generate response for: " << input_msg.text << std::endl;
         }
-    } else {
-        // No input available, sleep briefly
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    } else if (result == PopResult::SHUTDOWN) {
+        // Queue is shutting down, stop processing
+        return;
+    } else if (result == PopResult::INTERRUPTED) {
+        // External interrupt requested, continue to check control messages
+        return;
     }
 }
 
@@ -234,10 +253,9 @@ void LLMProcessor::cleanup() {
 }
 
 // TTSProcessor implementation
-TTSProcessor::TTSProcessor(SafeQueue<TextMessage>& input_queue, SafeQueue<ControlMessage>& control_queue,
-                           std::unique_ptr<ITTS> tts_backend)
-    : BaseProcessor("TTSProcessor"), input_queue_(input_queue), control_queue_(control_queue),
-      tts_(std::move(tts_backend)), is_speaking_(false), tts_pid_(-1) {
+TTSProcessor::TTSProcessor(SafeQueue<TextMessage>& input_queue, std::unique_ptr<ITTS> tts_backend, std::atomic<bool>* interrupt_flag)
+    : BaseProcessor("TTSProcessor"), input_queue_(input_queue),
+      tts_(std::move(tts_backend)), is_speaking_(false), tts_pid_(-1), interrupt_flag_(interrupt_flag) {
 }
 
 void TTSProcessor::stop() {
@@ -253,8 +271,8 @@ bool TTSProcessor::initialize() {
         return false;
     }
     
-    // Create audio output queue first
-    audio_output_queue_ = std::make_unique<SafeQueue<AudioChunkMessage>>(50); // 50 audio chunks max
+    // Create audio output queue using the same interrupt flag
+    audio_output_queue_ = std::make_unique<SafeQueue<AudioChunkMessage>>(50, interrupt_flag_);
     
     if (!tts_->init()) {
         std::cerr << "[TTSProcessor] Failed to initialize TTS backend" << std::endl;
@@ -262,7 +280,7 @@ bool TTSProcessor::initialize() {
     }
             
     // Initialize AudioOutputProcessor with the queue
-    audio_output_processor_ = std::make_unique<AudioOutputProcessor>(*audio_output_queue_, control_queue_);
+    audio_output_processor_ = std::make_unique<AudioOutputProcessor>(*audio_output_queue_);
     if (!audio_output_processor_->start()) {
         std::cerr << "[TTSProcessor] Failed to start AudioOutputProcessor" << std::endl;
         return false;
@@ -272,62 +290,60 @@ bool TTSProcessor::initialize() {
     return true;
 }
 
+bool TTSProcessor::handle_control_message(const ControlMessage& msg) {
+    if (msg.type == ControlMessage::INTERRUPT || 
+        msg.type == ControlMessage::FLUSH_QUEUES) {
+        // Flush input queue
+        size_t flushed = input_queue_.flush();
+        if (flushed > 0) {
+            std::cout << "[TTSProcessor] Interrupted! Flushed " << flushed << " pending TTS messages" << std::endl;
+        }
+        // Stop current speech gracefully
+        interrupt_current_speech();
+        std::cout << "[TTSProcessor] Interrupt handled, ready for new speech" << std::endl;
+        return true; // Handled
+    }
+    return false; // Not handled, use default behavior
+}
+
 void TTSProcessor::process() {
     // Check if we should stop processing
     if (!is_running()) {
         return;
     }
     
-    // Check for control messages first
-    ControlMessage control_msg(ControlMessage::INTERRUPT);
-    if (control_queue_.try_pop(control_msg)) {
-        if (control_msg.type == ControlMessage::INTERRUPT || 
-            control_msg.type == ControlMessage::FLUSH_QUEUES) {
-            // Flush input queue
-            size_t flushed = input_queue_.flush();
-            if (flushed > 0) {
-                std::cout << "[TTSProcessor] Interrupted! Flushed " << flushed << " pending TTS messages" << std::endl;
-            }
-            // Stop current speech gracefully
-            interrupt_current_speech();
-            // Clear interrupt flag after handling interruption
-            clear_interrupt();
-            std::cout << "[TTSProcessor] Interrupt handled, ready for new speech" << std::endl;
-            return;
-        }
-    }
-    
     TextMessage text_msg;
-    if (!input_queue_.try_pop(text_msg)) {
-        // No input available, sleep briefly
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    PopResult result = input_queue_.pop_blocking(text_msg);
+    
+    if (result == PopResult::SUCCESS) {
+        // Speak the chunk and get audio data
+        std::cout << "[TTSProcessor] Speaking: " << text_msg.text << std::endl;
+        
+        // Create AudioChunkMessage to receive the audio data
+        AudioChunkMessage audio_chunk;
+        bool success = tts_->speak(text_msg.text, audio_chunk);
+        
+        if (success && !audio_chunk.audio_data.empty()) {
+            // Queue the audio chunk for playback with blocking push
+            if (!audio_output_queue_->push_blocking(std::move(audio_chunk))) {
+                // Queue was shut down, stop processing
+                return;
+            } else {
+                mark_processed();
+                std::cout << "[TTSProcessor] Queued audio chunk with " << audio_chunk.audio_data.size() 
+                          << " samples at " << audio_chunk.sample_rate << " Hz" << std::endl;
+            }
+        } else {
+            std::cerr << "[TTSProcessor] Failed to speak: " << text_msg.text << std::endl;
+        }
+    } else if (result == PopResult::SHUTDOWN) {
+        // Queue is shutting down, stop processing
+        return;
+    } else if (result == PopResult::INTERRUPTED) {
+        // External interrupt requested, continue to check control messages
         return;
     }
-    
-    // Check for interruption before speaking (but don't skip if we just cleared it)
-    if (is_interrupt_requested()) {
-        std::cout << "[TTSProcessor] Clearing stale interrupt flag before speaking" << std::endl;
-        clear_interrupt();
-    }
-    
-    // Speak the chunk and get audio data
-    std::cout << "[TTSProcessor] Speaking: " << text_msg.text << std::endl;
-    
-    // Create AudioChunkMessage to receive the audio data
-    AudioChunkMessage audio_chunk;
-    bool success = tts_->speak(text_msg.text, audio_chunk);
-    
-    if (success && !audio_chunk.audio_data.empty()) {
-        // Queue the audio chunk for playback
-        if (!audio_output_queue_->push(std::move(audio_chunk), std::chrono::milliseconds(1000))) {
-            std::cerr << "[TTSProcessor] Failed to queue audio chunk (queue full)" << std::endl;
-        } else {
-            std::cout << "[TTSProcessor] Queued audio chunk with " << audio_chunk.audio_data.size() 
-                      << " samples at " << audio_chunk.sample_rate << " Hz" << std::endl;
-        }
-    } else {
-        std::cerr << "[TTSProcessor] Failed to speak: " << text_msg.text << std::endl;
-    }
+    // For other cases (EMPTY), the loop will continue
 }
 
 void TTSProcessor::cleanup() {
@@ -353,8 +369,8 @@ void TTSProcessor::interrupt_current_speech() {
 }
 
 // AudioOutputProcessor implementation
-AudioOutputProcessor::AudioOutputProcessor(SafeQueue<AudioChunkMessage>& input_queue, SafeQueue<ControlMessage>& control_queue)
-    : BaseProcessor("AudioOutputProcessor"), input_queue_(input_queue), control_queue_(control_queue),
+AudioOutputProcessor::AudioOutputProcessor(SafeQueue<AudioChunkMessage>& input_queue)
+    : BaseProcessor("AudioOutputProcessor"), input_queue_(input_queue),
       alsa_handle_(nullptr), sample_rate_(22050) {
 }
 
@@ -384,29 +400,19 @@ void AudioOutputProcessor::process() {
         return;
     }
     
-    // Check for control messages (though we don't handle them directly)
-    ControlMessage control_msg(ControlMessage::INTERRUPT);
-    if (control_queue_.try_pop(control_msg)) {
-        // Forward control messages to other processors
-        control_queue_.push(std::move(control_msg), std::chrono::milliseconds(10));
-    }
-    
     AudioChunkMessage audio_msg;
-    if (input_queue_.try_pop(audio_msg)) {
+    PopResult result = input_queue_.pop_blocking(audio_msg);
+    
+    if (result == PopResult::SUCCESS) {
         if (!audio_msg.audio_data.empty()) {
-            // Update sample rate if different
-            if (audio_msg.sample_rate != sample_rate_) {
-                sample_rate_ = audio_msg.sample_rate;
-                // Reinitialize ALSA with new sample rate
-                close_audio_device();
-                init_audio_device();
-            }
-            
             play_audio_chunk(audio_msg.audio_data);
         }
-    } else {
-        // No input available, sleep briefly
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } else if (result == PopResult::SHUTDOWN) {
+        // Queue is shutting down, stop processing
+        return;
+    } else if (result == PopResult::INTERRUPTED) {
+        // External interrupt requested, continue to check control messages
+        return;
     }
 }
 
@@ -490,15 +496,22 @@ void AudioOutputProcessor::play_audio_chunk(const std::vector<int16_t>& chunk) {
         return;
     }
     
-    snd_pcm_sframes_t frames = snd_pcm_writei(alsa_handle_, chunk.data(), chunk.size());
-    if (frames < 0) {
-        // Handle underrun
-        if (frames == -EPIPE) {
+    const int16_t* data_ptr = chunk.data();
+    size_t frames_total = chunk.size();
+    while (frames_total > 0) {
+        snd_pcm_sframes_t written = snd_pcm_writei(alsa_handle_, data_ptr, frames_total);
+        if (written >= 0) {
+            data_ptr += written;
+            frames_total -= static_cast<size_t>(written);
+            continue;
+        }
+        if (written == -EPIPE) {
             std::cerr << "[AudioOutputProcessor] ALSA underrun, recovering..." << std::endl;
             snd_pcm_prepare(alsa_handle_);
-        } else {
-            std::cerr << "[AudioOutputProcessor] ALSA write error: " << snd_strerror(frames) << std::endl;
+            continue;
         }
+        std::cerr << "[AudioOutputProcessor] ALSA write error: " << snd_strerror(written) << std::endl;
+        break;
     }
 }
 

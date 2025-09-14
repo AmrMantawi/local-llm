@@ -6,7 +6,6 @@
 #include "llm.h"
 #include "tts.h"
 #include <memory>
-#include <map>
 #include <chrono>
 
 namespace async_pipeline {
@@ -16,11 +15,11 @@ namespace async_pipeline {
  */
 struct PipelineConfig {
     // Queue sizes
-
-    size_t text_queue_size = 20;
+    size_t request_queue_size = 20;
     size_t response_queue_size = 20;
-    size_t control_queue_size = 100;  // High priority, needs to be responsive
-    
+    size_t alt_request_queue_size = 20;
+    size_t alt_response_queue_size = 20;
+
     // Timeouts (milliseconds)
     int audio_timeout_ms = 1000;
     int text_timeout_ms = 500;
@@ -30,10 +29,14 @@ struct PipelineConfig {
     bool enable_stt = true;
     bool enable_llm = true;
     bool enable_tts = true;
+    bool enable_alt_text = true;
     
     // Monitoring
     bool enable_stats_logging = false;
     int stats_log_interval_seconds = 10;
+    
+    // Interrupt mechanism
+    std::atomic<bool>* interrupt_flag = nullptr;
 };
 
 /**
@@ -49,6 +52,13 @@ public:
     }
     
     /**
+     * Set interrupt flag for queue operations
+     */
+    void set_interrupt_flag(std::atomic<bool>* interrupt_flag) {
+        config_.interrupt_flag = interrupt_flag;
+    }
+    
+    /**
      * Initialize the pipeline with backend implementations
      */
     bool initialize(std::unique_ptr<ISTT> stt_backend,
@@ -60,22 +70,32 @@ public:
         }
         
         try {
-            // Create queues
-            text_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.text_queue_size);
-            response_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.response_queue_size);
-            control_queue_ = std::make_unique<SafeQueue<ControlMessage>>(config_.control_queue_size);
+            // Create queues with interrupt flag support
+            request_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.request_queue_size, config_.interrupt_flag);
+            response_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.response_queue_size, config_.interrupt_flag);
             
-            // Create processors
+            // Alternate queues
+            if (config_.enable_alt_text) {
+                alt_request_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.alt_request_queue_size, config_.interrupt_flag);
+                alt_response_queue_ = std::make_unique<SafeQueue<TextMessage>>(config_.alt_response_queue_size, config_.interrupt_flag);
+            }
+            else {
+                alt_request_queue_ = nullptr;
+                alt_response_queue_ = nullptr;
+            }
+
+            // Create processors 
             if (config_.enable_stt && stt_backend) {
-                stt_processor_ = std::make_unique<STTProcessor>(*text_queue_, *control_queue_, std::move(stt_backend));
+                stt_processor_ = std::make_unique<STTProcessor>(*request_queue_, std::move(stt_backend));
             }
             
             if (config_.enable_llm && llm_backend) {
-                llm_processor_ = std::make_unique<LLMProcessor>(*text_queue_, *response_queue_, *control_queue_, std::move(llm_backend));
+                llm_processor_ = std::make_unique<LLMProcessor>(*request_queue_, *response_queue_, std::move(llm_backend),
+                                                               alt_request_queue_.get(), alt_response_queue_.get());
             }
             
             if (config_.enable_tts && tts_backend) {
-                tts_processor_ = std::make_unique<TTSProcessor>(*response_queue_, *control_queue_, std::move(tts_backend));
+                tts_processor_ = std::make_unique<TTSProcessor>(*response_queue_, std::move(tts_backend), config_.interrupt_flag);
             }
             
             std::cout << "[PipelineManager] Initialized successfully" << std::endl;
@@ -89,7 +109,7 @@ public:
     }
     
     /**
-     * Start the pipeline (all enabled processors)
+     * Start the pipeline
      */
     bool start() {
         if (running_) {
@@ -144,10 +164,12 @@ public:
         std::cout << "[PipelineManager] Stopping pipeline..." << std::endl;
         running_ = false;
         
-        // Shutdown queues first to wake up any blocking processors
-        if (text_queue_) text_queue_->shutdown();
+        // Signal shutdown to all processors using new signal-based system
+        immediate_shutdown();
+        
+        // Shutdown queues to wake up any blocking processors
+        if (request_queue_) request_queue_->shutdown();
         if (response_queue_) response_queue_->shutdown();
-        if (control_queue_) control_queue_->shutdown();
         
         // Now stop processors in forward order (STT first, TTS last)
         if (stt_processor_) {
@@ -187,9 +209,8 @@ public:
         BaseProcessor::Stats tts_stats;
         
 
-        size_t text_queue_size = 0;
+        size_t request_queue_size = 0;
         size_t response_queue_size = 0;
-        size_t control_queue_size = 0;
         
         std::chrono::steady_clock::time_point last_update;
     };
@@ -201,9 +222,8 @@ public:
         if (llm_processor_) stats.llm_stats = llm_processor_->get_stats();
         if (tts_processor_) stats.tts_stats = tts_processor_->get_stats();
 
-        if (text_queue_) stats.text_queue_size = text_queue_->size();
+        if (request_queue_) stats.request_queue_size = request_queue_->size();
         if (response_queue_) stats.response_queue_size = response_queue_->size();
-        if (control_queue_) stats.control_queue_size = control_queue_->size();
         
         stats.last_update = std::chrono::steady_clock::now();
         
@@ -220,13 +240,14 @@ public:
         
         // Create text message and push to LLM queue
         TextMessage text_msg(text);
-        if (!text_queue_->push(std::move(text_msg), std::chrono::milliseconds(config_.text_timeout_ms))) {
+        if (!request_queue_->push(std::move(text_msg), std::chrono::milliseconds(config_.text_timeout_ms))) {
             return false;
         }
         
         // Wait for response
         TextMessage llm_response;
-        if (!response_queue_->pop(llm_response, std::chrono::milliseconds(config_.response_timeout_ms))) {
+        PopResult result = response_queue_->pop(llm_response, std::chrono::milliseconds(config_.response_timeout_ms));
+        if (result != PopResult::SUCCESS) {
             return false;
         }
         
@@ -235,13 +256,75 @@ public:
     }
     
     /**
+     * Immediate interrupt - signal all processors directly
+     */
+    void immediate_interrupt() {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Signal all processors directly (no queue delays)
+        if (stt_processor_) stt_processor_->signal_control(ControlMessage(ControlMessage::INTERRUPT));
+        if (llm_processor_) llm_processor_->signal_control(ControlMessage(ControlMessage::INTERRUPT));
+        if (tts_processor_) tts_processor_->signal_control(ControlMessage(ControlMessage::INTERRUPT));
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        
+        std::cout << "[PipelineManager] Immediate interrupt signaled to all processors (latency: " 
+                  << latency.count() << "μs)" << std::endl;
+    }
+    
+    /**
+     * Immediate shutdown - signal all processors directly
+     */
+    void immediate_shutdown() {
+        // Signal all processors directly (no queue delays)
+        if (stt_processor_) stt_processor_->signal_control(ControlMessage(ControlMessage::SHUTDOWN));
+        if (llm_processor_) llm_processor_->signal_control(ControlMessage(ControlMessage::SHUTDOWN));
+        if (tts_processor_) tts_processor_->signal_control(ControlMessage(ControlMessage::SHUTDOWN));
+        
+        std::cout << "[PipelineManager] Immediate shutdown signaled to all processors" << std::endl;
+    }
+    
+    /**
+     * Immediate flush - signal all processors to flush their queues
+     */
+    void immediate_flush() {
+        // Signal all processors directly (no queue delays)
+        if (stt_processor_) stt_processor_->signal_control(ControlMessage(ControlMessage::FLUSH_QUEUES));
+        if (llm_processor_) llm_processor_->signal_control(ControlMessage(ControlMessage::FLUSH_QUEUES));
+        if (tts_processor_) tts_processor_->signal_control(ControlMessage(ControlMessage::FLUSH_QUEUES));
+        
+        std::cout << "[PipelineManager] Immediate flush signaled to all processors" << std::endl;
+    }
+    
+    /**
+     * Measure control response latency
+     */
+    std::chrono::microseconds measure_control_latency() {
+        auto start = std::chrono::high_resolution_clock::now();
+        immediate_interrupt();
+        // Note: This measures signal broadcast time, not full response time
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    }
+    
+    /**
+     * Legacy compatibility methods (deprecated)
+     */
+    void interrupt() {
+        immediate_interrupt();
+    }
+    
+    void shutdown() {
+        immediate_shutdown();
+    }
+
+    /**
      * Clear all queues
      */
     void clear_queues() {
-
-        if (text_queue_) text_queue_->clear();
+        if (request_queue_) request_queue_->clear();
         if (response_queue_) response_queue_->clear();
-        if (control_queue_) control_queue_->clear();
     }
 
 private:
@@ -249,11 +332,12 @@ private:
     std::atomic<bool> running_;
 
     
-    // Queues
-    std::unique_ptr<SafeQueue<TextMessage>> text_queue_;
+    // Queues (control_queue_ removed - using signal-based control now)
+    std::unique_ptr<SafeQueue<TextMessage>> request_queue_;
     std::unique_ptr<SafeQueue<TextMessage>> response_queue_;
-    std::unique_ptr<SafeQueue<ControlMessage>> control_queue_;
-    
+    std::unique_ptr<SafeQueue<TextMessage>> alt_request_queue_;
+    std::unique_ptr<SafeQueue<TextMessage>> alt_response_queue_;
+
     // Processors
     std::unique_ptr<STTProcessor> stt_processor_;
     std::unique_ptr<LLMProcessor> llm_processor_;
@@ -267,9 +351,8 @@ private:
         llm_processor_.reset();
         tts_processor_.reset();
         
-        text_queue_.reset();
+        request_queue_.reset();
         response_queue_.reset();
-        control_queue_.reset();
     }
     
     void monitor_loop() {
@@ -303,10 +386,11 @@ private:
                       << ", Avg Time: " << stats.tts_stats.avg_processing_time.count() << "ms" << std::endl;
         }
         
-        std::cout << "[Queues] Text: " << stats.text_queue_size 
-                  << ", Text: " << stats.text_queue_size 
-                  << ", Response: " << stats.response_queue_size 
-                  << ", Control: " << stats.control_queue_size << std::endl;
+        std::cout << "[Queues] Request: " << stats.request_queue_size 
+                  << ", Response: " << stats.response_queue_size << std::endl;
+        std::cout << "[Control] STT signals: " << stats.stt_stats.control_signals_received
+                  << ", LLM signals: " << stats.llm_stats.control_signals_received  
+                  << ", TTS signals: " << stats.tts_stats.control_signals_received << std::endl;
         std::cout << "==========================================\n" << std::endl;
     }
 };

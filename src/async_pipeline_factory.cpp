@@ -1,5 +1,6 @@
 #include "pipeline_manager.h"
 #include "config_manager.h"
+#include "async_pipeline_factory.h"
 
 // Backend includes
 #ifdef USE_WHISPER
@@ -17,19 +18,9 @@
 namespace async_pipeline {
 
 /**
- * Pipeline mode enumeration defining different use cases
- */
-enum class PipelineMode {
-    VOICE_ASSISTANT,    // Full pipeline: Audio → STT → LLM → TTS (microphone mode)
-    TEXT_ONLY,          // LLM only: Text → LLM → Text (server/chat mode)
-    TRANSCRIPTION,      // Audio → STT → Text (transcription service)
-    SYNTHESIS           // Text → TTS → Audio (text-to-speech service)
-};
-
-/**
  * Factory functions to create backend instances
  */
-class PipelineFactory {
+class PipelineFactoryImpl {
 public:
     static std::unique_ptr<ISTT> create_stt_backend() {
 #ifdef USE_WHISPER
@@ -70,12 +61,6 @@ public:
 #endif
     }
     
-    /**
-     * Create pipeline based on specified mode
-     */
-    static std::unique_ptr<PipelineManager> create_pipeline(PipelineMode mode = PipelineMode::VOICE_ASSISTANT, bool enable_stats = false);
-    
-
 };
 
 // Factory method implementation
@@ -111,6 +96,13 @@ std::unique_ptr<PipelineManager> PipelineFactory::create_pipeline(PipelineMode m
             config.enable_llm = false;
             config.enable_tts = true;
             break;
+        case PipelineMode::VOICE_ASSISTANT_WITH_ALT_TEXT:
+            // Full pipeline with alternate text input/output enabled
+            config.enable_stt = true;
+            config.enable_llm = true;
+            config.enable_tts = true;
+            config.enable_alt_text = true;
+            break;
     }
     
     // Stats logging is independent of mode
@@ -120,9 +112,9 @@ std::unique_ptr<PipelineManager> PipelineFactory::create_pipeline(PipelineMode m
     auto pipeline = std::make_unique<PipelineManager>(config);
     
     // Create backends
-    auto stt_backend = config.enable_stt ? PipelineFactory::create_stt_backend() : nullptr;
-    auto llm_backend = config.enable_llm ? PipelineFactory::create_llm_backend() : nullptr;
-    auto tts_backend = config.enable_tts ? PipelineFactory::create_tts_backend() : nullptr;
+    auto stt_backend = config.enable_stt ? PipelineFactoryImpl::create_stt_backend() : nullptr;
+    auto llm_backend = config.enable_llm ? PipelineFactoryImpl::create_llm_backend() : nullptr;
+    auto tts_backend = config.enable_tts ? PipelineFactoryImpl::create_tts_backend() : nullptr;
     
     // Initialize pipeline
     if (!pipeline->initialize(std::move(stt_backend), std::move(llm_backend), std::move(tts_backend))) {

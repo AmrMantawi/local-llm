@@ -73,8 +73,8 @@ struct ControlMessage {
 template<typename T>
 class SafeQueue {
 public:
-    explicit SafeQueue(size_t max_size = 100, std::atomic<bool>* external_interrupt_flag = nullptr) 
-        : max_size_(max_size), shutdown_(false), external_interrupt_flag_(external_interrupt_flag) {}
+    explicit SafeQueue(size_t max_size = 100, std::atomic<bool>* interrupt_flag = nullptr) 
+        : max_size_(max_size), shutdown_(false), interrupt_flag_(interrupt_flag) {}
     
     ~SafeQueue() {
         shutdown();
@@ -211,10 +211,10 @@ private:
     std::condition_variable not_full_;
     size_t max_size_;
     std::atomic<bool> shutdown_;
-    std::atomic<bool>* external_interrupt_flag_;
+    std::atomic<bool>* interrupt_flag_;
     
     bool external_interrupt_requested() const {
-        return external_interrupt_flag_ && external_interrupt_flag_->load(std::memory_order_acquire);
+        return interrupt_flag_ && interrupt_flag_->load(std::memory_order_acquire);
     }
 };
 
@@ -264,8 +264,10 @@ public:
             control_queue_.push(msg);
         }
         control_signal_.notify_one(); // Wake up processor immediately
-        
-        std::cout << "[" << name_ << "] Control signal received: " << control_type_to_string(msg.type) << std::endl;
+        // Reduce logging noise: log only shutdown and pause/resume at info level
+        if (msg.type == ControlMessage::SHUTDOWN || msg.type == ControlMessage::PAUSE || msg.type == ControlMessage::RESUME) {
+            std::cout << "[" << name_ << "] Control signal received: " << control_type_to_string(msg.type) << std::endl;
+        }
     }
     
     // Check for immediate control signals (non-blocking)
@@ -322,6 +324,9 @@ protected:
     virtual void process() = 0;
     virtual void cleanup() {}
     
+    // Mark that useful work was performed in the current cycle
+    void mark_processed() { processed_this_cycle_ = true; }
+    
     // Override to handle specific control messages immediately
     virtual bool handle_control_message(const ControlMessage& /*msg*/) {
         return false; // Return true if handled, false to continue with default processing
@@ -332,13 +337,43 @@ protected:
         while (running_) {
             try {
                 auto start_time = std::chrono::steady_clock::now();
+                processed_this_cycle_ = false;
                 process();
                 auto end_time = std::chrono::steady_clock::now();
+                
+                // Check for any pending control messages after processing
+                ControlMessage control_msg(ControlMessage::INTERRUPT);
+                while (check_control_signal(control_msg)) {
+                    auto control_start = std::chrono::high_resolution_clock::now();
+                    
+                    // Handle control message
+                    bool handled = handle_control_message(control_msg);
+                    if (!handled) {
+                        // Default control handling
+                        if (control_msg.type == ControlMessage::SHUTDOWN) {
+                            return; // Exit the run loop
+                        }
+                    }
+                    
+                    // Update control response statistics
+                    auto control_end = std::chrono::high_resolution_clock::now();
+                    auto control_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                        control_end - control_start);
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        stats_.control_signals_received++;
+                        stats_.avg_control_response_time = std::chrono::microseconds(
+                            (stats_.avg_control_response_time.count() + control_time.count()) / 2);
+                    }
+                }
                 
                 // Update statistics
                 {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
-                    stats_.messages_processed++;
+                    if (processed_this_cycle_) {
+                        stats_.messages_processed++;
+                    }
                     stats_.last_activity = end_time;
                     
                     auto processing_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -378,6 +413,7 @@ private:
     
     mutable std::mutex stats_mutex_;
     Stats stats_;
+    bool processed_this_cycle_ = false;
     
     // Signal-based control system
     mutable std::mutex control_mutex_;

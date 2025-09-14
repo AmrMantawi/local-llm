@@ -2,6 +2,7 @@
 
 #include "config_manager.h"
 #include "pipeline_manager.h"
+#include "async_pipeline_factory.h"
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -23,20 +24,6 @@
 #include <cstring>
 #include <nlohmann/json.hpp>
 
-// Forward declaration - factory implementation will be linked
-namespace async_pipeline {
-    enum class PipelineMode {
-        VOICE_ASSISTANT,    // Full pipeline: Audio → STT → LLM → TTS -> Audio
-        TEXT_ONLY,          // LLM only: Text → LLM → Text (chat mode)
-        TRANSCRIPTION,      // Audio → STT → Text (transcription service)
-        SYNTHESIS           // Text → TTS → Audio (text-to-speech service)
-    };
-    
-    class PipelineFactory {
-    public:
-        static std::unique_ptr<PipelineManager> create_pipeline(PipelineMode mode = PipelineMode::VOICE_ASSISTANT, bool enable_stats = false);
-    };
-}
 
 // Graceful shutdown on Ctrl+C
 static std::atomic<bool> keep_running{true};
@@ -106,6 +93,9 @@ int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats) {
             return 1;
         }
         
+        // Set interrupt flag for queue operations
+        pipeline->set_interrupt_flag(&keep_running);
+        
         // Start the pipeline
         if (!pipeline->start()) {
             std::cerr << "Failed to start pipeline\n";
@@ -134,7 +124,7 @@ int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats) {
                     std::cout << "\n[Stats] STT: " << stats.stt_stats.messages_processed
                               << ", LLM: " << stats.llm_stats.messages_processed
                               << ", TTS: " << stats.tts_stats.messages_processed << std::endl;
-                    std::cout << "[Queues] Text: " << stats.text_queue_size 
+                    std::cout << "[Queues] Request: " << stats.request_queue_size 
                               << ", Response: " << stats.response_queue_size << std::endl;
                     last_stats_time = now;
                 }
@@ -258,12 +248,15 @@ int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_runni
     std::cout << "Starting server mode with async pipeline...\n";
     
     try {
-        // Create TEXT_ONLY pipeline (LLM only: Text → LLM → Text)
-        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::TEXT_ONLY, enable_stats);
+        // Create voice assistant pipeline (full Audio → STT → LLM → TTS chain) with alternate text input option (Text → LLM → Text)
+        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT_WITH_ALT_TEXT, enable_stats);
         if (!pipeline) {
-            std::cerr << "Failed to create TEXT_ONLY pipeline\n";
+            std::cerr << "Failed to create pipeline\n";
             return 1;
         }
+        
+        // Set interrupt flag for queue operations
+        pipeline->set_interrupt_flag(&keep_running);
         
         // Start the pipeline
         if (!pipeline->start()) {
@@ -271,7 +264,7 @@ int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_runni
             return 1;
         }
         
-        std::cout << "Pipeline started in TEXT_ONLY mode (LLM processing only)\n";
+        std::cout << "Pipeline started with voice assistant + alt text mode\n";
         
         // Create server socket
         int listen_fd = create_and_listen(socketPath);
