@@ -105,11 +105,11 @@ Options:
 The system uses a sophisticated async pipeline architecture:
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+┌─────────────────┐    ┌─────────────────┐     ┌─────────────────┐    ┌─────────────────┐
 │  STTProcessor   │───▶│  LLMProcessor   │───▶│  TTSProcessor   │───▶│AudioOutputProc │
-│  (Audio→Text)   │    │  (Text→Text)    │    │  (Text→Audio)   │    │  (Audio Play)  │
-│  SDL2 + Whisper │    │  Llama.cpp      │    │  Paroli TTS     │    │  ALSA Output   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+│  (Audio→Text)   │    │  (Text→Text)    │     │  (Text→Audio)   │    │  (Audio Play)   │
+│  SDL2 + Whisper │    │  Llama.cpp      │     │  Paroli TTS     │    │  ALSA Output    │
+└─────────────────┘    └─────────────────┘     └─────────────────┘    └─────────────────┘
 ```
 
 ### Pipeline Modes
