@@ -26,24 +26,67 @@ enum class PopResult {
     TIMEOUT         // Timeout exceeded
 };
 
+#ifdef ENABLE_STATS_LOGGING
+struct MessageStats {
+    std::chrono::steady_clock::time_point timestamp;
+    
+    MessageStats() {
+        timestamp = std::chrono::steady_clock::now();
+    }
+    
+    // Helper methods
+    std::chrono::milliseconds age() const {
+        auto now = std::chrono::steady_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - timestamp);
+    }
+};
+#endif
+
 struct TextMessage {
     std::string text;
-    // Stats
-    // std::chrono::steady_clock::time_point timestamp;
-    // float confidence;
     
-    TextMessage() {}
+#ifdef ENABLE_STATS_LOGGING
+    MessageStats stats;
+    
+    // Convenience methods for stats access
+    std::chrono::milliseconds age() const { return stats.age(); }
+#endif
+    
+    TextMessage() {
+#ifdef ENABLE_STATS_LOGGING
+        stats = MessageStats();
+#endif
+    }
     TextMessage(std::string txt)
-        : text(std::move(txt)) {}
+        : text(std::move(txt)) {
+#ifdef ENABLE_STATS_LOGGING
+        stats = MessageStats();
+#endif
+    }
 };
 
 struct AudioChunkMessage {
     std::vector<int16_t> audio_data;
     unsigned int sample_rate;
     
-    AudioChunkMessage() : sample_rate(22050) {}
+#ifdef ENABLE_STATS_LOGGING
+    MessageStats stats;
+    
+    // Convenience methods for stats access
+    std::chrono::milliseconds age() const { return stats.age(); }
+#endif
+    
+    AudioChunkMessage() : sample_rate(22050) {
+#ifdef ENABLE_STATS_LOGGING
+        stats = MessageStats();
+#endif
+    }
     AudioChunkMessage(std::vector<int16_t> audio, unsigned int rate = 22050)
-        : audio_data(std::move(audio)), sample_rate(rate) {}
+        : audio_data(std::move(audio)), sample_rate(rate) {
+#ifdef ENABLE_STATS_LOGGING
+        stats = MessageStats();
+#endif
+    }
 };
 
 /**
@@ -60,11 +103,19 @@ struct ControlMessage {
     
     Type type;
 
-    // Stats
-    // std::chrono::steady_clock::time_point timestamp;
+#ifdef ENABLE_STATS_LOGGING
+    MessageStats stats;
+    
+    // Convenience methods for stats access
+    std::chrono::milliseconds age() const { return stats.age(); }
+#endif
     
     ControlMessage(Type t) 
-        : type(t) {}
+        : type(t) {
+#ifdef ENABLE_STATS_LOGGING
+        stats = MessageStats();
+#endif
+    }
 };
 
 /**
@@ -304,19 +355,28 @@ public:
         return !control_queue_.empty() && control_queue_.front().type == ControlMessage::INTERRUPT;
     }
     
+#ifdef ENABLE_STATS_LOGGING
     // Get processing statistics
     struct Stats {
         uint64_t messages_processed = 0;
         std::chrono::milliseconds avg_processing_time{0};
-        std::chrono::steady_clock::time_point last_activity;
         uint64_t control_signals_received = 0;
-        std::chrono::microseconds avg_control_response_time{0};
+        std::chrono::milliseconds avg_control_response_time{0};
+        
+        void print() const {
+            std::cout << "Processed: " << messages_processed
+                      << ", Avg Time: " << avg_processing_time.count() << "ms"
+                      << ", Control signals: " << control_signals_received
+                      << ", Avg control response: " << avg_control_response_time.count() << "ms"
+                      << std::endl;
+        }
     };
     
     Stats get_stats() const {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         return stats_;
     }
+#endif
 
 protected:
     // Override in derived classes
@@ -324,8 +384,6 @@ protected:
     virtual void process() = 0;
     virtual void cleanup() {}
     
-    // Mark that useful work was performed in the current cycle
-    void mark_processed() { processed_this_cycle_ = true; }
     
     // Override to handle specific control messages immediately
     virtual bool handle_control_message(const ControlMessage& /*msg*/) {
@@ -336,52 +394,26 @@ protected:
     void run() {
         while (running_) {
             try {
-                auto start_time = std::chrono::steady_clock::now();
-                processed_this_cycle_ = false;
                 process();
-                auto end_time = std::chrono::steady_clock::now();
                 
                 // Check for any pending control messages after processing
                 ControlMessage control_msg(ControlMessage::INTERRUPT);
                 while (check_control_signal(control_msg)) {
-                    auto control_start = std::chrono::high_resolution_clock::now();
-                    
                     // Handle control message
                     bool handled = handle_control_message(control_msg);
                     if (!handled) {
                         // Default control handling
                         if (control_msg.type == ControlMessage::SHUTDOWN) {
+# ifdef ENABLE_STATS_LOGGING
+                            auto n = stats_.control_signals_received++;
+                            stats_.avg_control_response_time = std::chrono::milliseconds(
+                                (stats_.avg_control_response_time.count() * (n - 1) + control_msg.age().count()) / n
+                            );
+#endif
                             return; // Exit the run loop
                         }
                     }
-                    
-                    // Update control response statistics
-                    auto control_end = std::chrono::high_resolution_clock::now();
-                    auto control_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                        control_end - control_start);
-                    
-                    {
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        stats_.control_signals_received++;
-                        stats_.avg_control_response_time = std::chrono::microseconds(
-                            (stats_.avg_control_response_time.count() + control_time.count()) / 2);
-                    }
-                }
-                
-                // Update statistics
-                {
-                    std::lock_guard<std::mutex> lock(stats_mutex_);
-                    if (processed_this_cycle_) {
-                        stats_.messages_processed++;
-                    }
-                    stats_.last_activity = end_time;
-                    
-                    auto processing_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        end_time - start_time);
-                    stats_.avg_processing_time = std::chrono::milliseconds(
-                        (stats_.avg_processing_time.count() + processing_time.count()) / 2);
-                }
-                
+                }                
             } catch (const std::exception& e) {
                 // Log error but continue processing
                 std::cerr << "[" << name_ << "] Processing error: " << e.what() << std::endl;
@@ -411,9 +443,10 @@ private:
     std::atomic<bool> running_;
     std::thread thread_;
     
+#ifdef ENABLE_STATS_LOGGING
     mutable std::mutex stats_mutex_;
     Stats stats_;
-    bool processed_this_cycle_ = false;
+#endif
     
     // Signal-based control system
     mutable std::mutex control_mutex_;

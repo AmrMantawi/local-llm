@@ -34,16 +34,15 @@ static void handle_sigint(int)
 }
 
 // Forward declarations
-int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats = false);
-int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running, bool enable_stats = false);
+int run_cli_mode(std::atomic<bool>& keep_running);
+int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running);
 
 int main(int argc, char** argv) {
 
-    // CLI flags: --config /path/models.json, --socket /tmp/local-llm.sock, --server, --stats
+    // CLI flags: --config /path/models.json, --socket /tmp/local-llm.sock, --server
     const char* configPath = "/usr/share/local-llm/config/models.json";
     std::string socketPath = "/run/local-llm.sock";
-    bool server_mode = false; 
-    bool enable_stats = false;
+    bool server_mode = false;
     
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -53,12 +52,9 @@ int main(int argc, char** argv) {
             socketPath = argv[++i];
         } else if (arg == "--server") {
             server_mode = true;
-        } else if (arg == "--stats") {
-            enable_stats = true;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: local-llm [--server] [--config /path/models.json] [--socket /run/local-llm.sock] [--stats]\n";
+            std::cout << "Usage: local-llm [--server] [--config /path/models.json] [--socket /run/local-llm.sock]\n";
             std::cout << "  --server   Run in server mode (default: CLI mode)\n";
-            std::cout << "  --stats    Enable pipeline statistics logging\n";
             return 0;
         }
     }
@@ -74,20 +70,20 @@ int main(int argc, char** argv) {
 
     if (server_mode) {
         // Server mode: use async pipeline with TEXT_ONLY mode
-        return run_server_mode(socketPath, keep_running, enable_stats);
+        return run_server_mode(socketPath, keep_running);
     } else {
         // CLI mode: use async pipeline with VOICE_ASSISTANT mode
-        return run_cli_mode(keep_running, enable_stats);
+        return run_cli_mode(keep_running);
     }
 }
 
 // Pipeline implementation for CLI mode
-int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats) {
+int run_cli_mode(std::atomic<bool>& keep_running) {
     std::cout << "Starting pipeline for CLI mode...\n";
     
     try {
         // Create voice assistant pipeline (full Audio → STT → LLM → TTS chain)
-        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT, enable_stats);
+        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT);
         if (!pipeline) {
             std::cerr << "Failed to create pipeline\n";
             return 1;
@@ -109,46 +105,13 @@ int run_cli_mode(std::atomic<bool>& keep_running, bool enable_stats) {
         std::cout << "  - Language model generation\n";
         std::cout << "  - Text-to-speech synthesis\n\n";
         
-        // Main loop - monitor and optionally display statistics
-        if (enable_stats) {
-            auto last_stats_time = std::chrono::steady_clock::now();
-            const auto stats_interval = std::chrono::seconds(10);
-            
-            while (keep_running && pipeline->is_running()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                
-                // Periodically show statistics
-                auto now = std::chrono::steady_clock::now();
-                if (now - last_stats_time >= stats_interval) {
-                    auto stats = pipeline->get_stats();
-                    std::cout << "\n[Stats] STT: " << stats.stt_stats.messages_processed
-                              << ", LLM: " << stats.llm_stats.messages_processed
-                              << ", TTS: " << stats.tts_stats.messages_processed << std::endl;
-                    std::cout << "[Queues] Request: " << stats.request_queue_size 
-                              << ", Response: " << stats.response_queue_size << std::endl;
-                    last_stats_time = now;
-                }
-            }
-        } else {
-            // Just wait without stats logging
-            while (keep_running && pipeline->is_running()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            }
+        // Main loop - wait for pipeline to complete
+        while (keep_running && pipeline->is_running()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         
         std::cout << "\nStopping pipeline...\n";
         pipeline->stop();
-        
-        // Show final statistics if enabled
-        if (enable_stats) {
-            auto final_stats = pipeline->get_stats();
-            std::cout << "\n=== Final Statistics ===\n";
-
-            std::cout << "STT processed: " << final_stats.stt_stats.messages_processed << std::endl;
-            std::cout << "LLM processed: " << final_stats.llm_stats.messages_processed << std::endl;
-            std::cout << "TTS processed: " << final_stats.tts_stats.messages_processed << std::endl;
-
-        }
         
         std::cout << "Pipeline stopped successfully\n";
         return 0;
@@ -244,12 +207,12 @@ void handle_client_with_pipeline(int client_fd, async_pipeline::PipelineManager&
 } // namespace
 
 // Server mode implementation using async pipeline
-int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running, bool enable_stats) {
+int run_server_mode(const std::string& socketPath, std::atomic<bool>& keep_running) {
     std::cout << "Starting server mode with async pipeline...\n";
     
     try {
         // Create voice assistant pipeline (full Audio → STT → LLM → TTS chain) with alternate text input option (Text → LLM → Text)
-        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT_WITH_ALT_TEXT, enable_stats);
+        auto pipeline = async_pipeline::PipelineFactory::create_pipeline(async_pipeline::PipelineMode::VOICE_ASSISTANT_WITH_ALT_TEXT);
         if (!pipeline) {
             std::cerr << "Failed to create pipeline\n";
             return 1;

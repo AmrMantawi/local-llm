@@ -17,7 +17,7 @@ class PipelineManager;
 
 class PipelineFactory {
 public:
-    static std::unique_ptr<PipelineManager> create_pipeline(PipelineMode mode = PipelineMode::VOICE_ASSISTANT, bool enable_stats = false);
+    static std::unique_ptr<PipelineManager> create_pipeline(PipelineMode mode = PipelineMode::VOICE_ASSISTANT);
 };
 
 } // namespace async_pipeline

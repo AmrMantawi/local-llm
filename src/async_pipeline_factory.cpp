@@ -64,7 +64,7 @@ public:
 };
 
 // Factory method implementation
-std::unique_ptr<PipelineManager> PipelineFactory::create_pipeline(PipelineMode mode, bool enable_stats) {
+std::unique_ptr<PipelineManager> PipelineFactory::create_pipeline(PipelineMode mode) {
     PipelineConfig config;
     
     // Configure components based on mode
@@ -104,9 +104,6 @@ std::unique_ptr<PipelineManager> PipelineFactory::create_pipeline(PipelineMode m
             config.enable_alt_text = true;
             break;
     }
-    
-    // Stats logging is independent of mode
-    config.enable_stats_logging = enable_stats;
     
     // Create pipeline with the configured settings
     auto pipeline = std::make_unique<PipelineManager>(config);

@@ -153,6 +153,9 @@ option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
 option(USE_LLAMA     "Enable llama.cpp for LLM"     ON)
 option(USE_Paroli    "Enable Paroli for TTS"        ON)
 
+# Statistics and monitoring options
+option(ENABLE_STATS "Enable pipeline statistics logging and monitoring" OFF)
+
 find_package(SDL2 REQUIRED)
 find_package(ALSA REQUIRED)
 
@@ -174,6 +177,11 @@ if(USE_WHISPER)
     list(APPEND EXTRA_LIBS whisper)
 else()
     message(FATAL_ERROR "No STT backend selected")
+endif()
+
+# Statistics logging compile definition
+if(ENABLE_STATS_LOGGING)
+    add_definitions(-DENABLE_STATS_LOGGING)
 endif()
 
 if(USE_LLAMA)

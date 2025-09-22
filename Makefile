@@ -1,12 +1,13 @@
 # Local LLM Makefile
 # Provides convenient shortcuts for common development tasks
 
-.PHONY: help build clean setup run test
+.PHONY: help build clean setup run test debug
 
 # Default target
 help:
 	@echo "Local LLM - Available targets:"
 	@echo "  build    - Build the project"
+	@echo "  debug    - Build with stats logging enabled"
 	@echo "  clean    - Clean build artifacts"
 	@echo "  setup    - Run setup script"
 	@echo "  run      - Build and run the application"
@@ -17,6 +18,12 @@ build:
 	@echo "🔨 Building project..."
 	mkdir -p build
 	cd build && cmake .. && make -j$(shell nproc)
+
+# Build with debug stats enabled
+debug:
+	@echo "🐛 Building with stats logging enabled..."
+	mkdir -p build
+	cd build && cmake -DENABLE_STATS_LOGGING=ON .. && make -j$(shell nproc)
 
 # Clean build artifacts
 clean:

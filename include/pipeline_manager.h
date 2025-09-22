@@ -31,10 +31,6 @@ struct PipelineConfig {
     bool enable_tts = true;
     bool enable_alt_text = true;
     
-    // Monitoring
-    bool enable_stats_logging = false;
-    int stats_log_interval_seconds = 10;
-    
     // Interrupt mechanism
     std::atomic<bool>* interrupt_flag = nullptr;
 };
@@ -138,13 +134,7 @@ public:
             }
             
             running_ = true;
-            
-            // TODO: Create flag to enable/disable stat monitoring
-            // Start monitoring thread if enabled
-            if (config_.enable_stats_logging) {
-                monitoring_thread_ = std::thread(&PipelineManager::monitor_loop, this);
-            }
-            
+             
             std::cout << "[PipelineManager] Pipeline started successfully" << std::endl;
             return true;
             
@@ -164,14 +154,11 @@ public:
         std::cout << "[PipelineManager] Stopping pipeline..." << std::endl;
         running_ = false;
         
-        // Signal shutdown to all processors using new signal-based system
-        immediate_shutdown();
-        
         // Shutdown queues to wake up any blocking processors
         if (request_queue_) request_queue_->shutdown();
         if (response_queue_) response_queue_->shutdown();
         
-        // Now stop processors in forward order (STT first, TTS last)
+        // Stop processors in forward order (STT first, TTS last)
         if (stt_processor_) {
             stt_processor_->stop();
         }
@@ -184,11 +171,12 @@ public:
             tts_processor_->stop();
         }
         
-        // TODO: Add flag to enable/disable stat monitoring
-        // Stop monitoring
-        if (monitoring_thread_.joinable()) {
-            monitoring_thread_.join();
-        }
+        
+#ifdef ENABLE_STATS_LOGGING
+        // Show final statistics
+        auto final_stats = get_stats();
+        final_stats.print();
+#endif
         
         std::cout << "[PipelineManager] Pipeline stopped" << std::endl;
     }
@@ -200,6 +188,7 @@ public:
         return running_;
     }
     
+#ifdef ENABLE_STATS_LOGGING
     /**
      * Get overall pipeline statistics
      */
@@ -208,11 +197,15 @@ public:
         BaseProcessor::Stats llm_stats;
         BaseProcessor::Stats tts_stats;
         
-
-        size_t request_queue_size = 0;
-        size_t response_queue_size = 0;
-        
-        std::chrono::steady_clock::time_point last_update;
+        void print() const {
+            std::cout << "\n=== Final Statistics ===" << std::endl;
+            std::cout << "=== STT Stats ===" << std::endl;
+            stt_stats.print();
+            std::cout << "=== LLM Stats ===" << std::endl;
+            llm_stats.print();
+            std::cout << "=== TTS Stats ===" << std::endl;
+            tts_stats.print();
+        }
     };
     
     PipelineStats get_stats() const {
@@ -221,14 +214,10 @@ public:
         if (stt_processor_) stats.stt_stats = stt_processor_->get_stats();
         if (llm_processor_) stats.llm_stats = llm_processor_->get_stats();
         if (tts_processor_) stats.tts_stats = tts_processor_->get_stats();
-
-        if (request_queue_) stats.request_queue_size = request_queue_->size();
-        if (response_queue_) stats.response_queue_size = response_queue_->size();
-        
-        stats.last_update = std::chrono::steady_clock::now();
         
         return stats;
     }
+#endif
     
     /**
      * Process a single text input (bypasses audio/STT for server mode)
@@ -267,10 +256,10 @@ public:
         if (tts_processor_) tts_processor_->signal_control(ControlMessage(ControlMessage::INTERRUPT));
         
         auto end_time = std::chrono::high_resolution_clock::now();
-        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
         
         std::cout << "[PipelineManager] Immediate interrupt signaled to all processors (latency: " 
-                  << latency.count() << "μs)" << std::endl;
+                  << latency.count() << "ms)" << std::endl;
     }
     
     /**
@@ -300,12 +289,12 @@ public:
     /**
      * Measure control response latency
      */
-    std::chrono::microseconds measure_control_latency() {
+    std::chrono::milliseconds measure_control_latency() {
         auto start = std::chrono::high_resolution_clock::now();
         immediate_interrupt();
         // Note: This measures signal broadcast time, not full response time
         auto end = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     }
     
     /**
@@ -343,8 +332,6 @@ private:
     std::unique_ptr<LLMProcessor> llm_processor_;
     std::unique_ptr<TTSProcessor> tts_processor_;
     
-    // Monitoring
-    std::thread monitoring_thread_;
     
     void cleanup() {
         stt_processor_.reset();
@@ -353,45 +340,6 @@ private:
         
         request_queue_.reset();
         response_queue_.reset();
-    }
-    
-    void monitor_loop() {
-        while (running_) {
-            std::this_thread::sleep_for(std::chrono::seconds(config_.stats_log_interval_seconds));
-            
-            if (!running_) break;
-            
-            auto stats = get_stats();
-            log_stats(stats);
-        }
-    }
-    
-    void log_stats(const PipelineStats& stats) {
-        std::cout << "\n[PipelineManager] === Pipeline Statistics ===" << std::endl;
-        
-        // Audio processing is now integrated into STT processor
-        
-        if (stt_processor_) {
-            std::cout << "[STT] Processed: " << stats.stt_stats.messages_processed
-                      << ", Avg Time: " << stats.stt_stats.avg_processing_time.count() << "ms" << std::endl;
-        }
-        
-        if (llm_processor_) {
-            std::cout << "[LLM] Processed: " << stats.llm_stats.messages_processed
-                      << ", Avg Time: " << stats.llm_stats.avg_processing_time.count() << "ms" << std::endl;
-        }
-        
-        if (tts_processor_) {
-            std::cout << "[TTS] Processed: " << stats.tts_stats.messages_processed
-                      << ", Avg Time: " << stats.tts_stats.avg_processing_time.count() << "ms" << std::endl;
-        }
-        
-        std::cout << "[Queues] Request: " << stats.request_queue_size 
-                  << ", Response: " << stats.response_queue_size << std::endl;
-        std::cout << "[Control] STT signals: " << stats.stt_stats.control_signals_received
-                  << ", LLM signals: " << stats.llm_stats.control_signals_received  
-                  << ", TTS signals: " << stats.tts_stats.control_signals_received << std::endl;
-        std::cout << "==========================================\n" << std::endl;
     }
 };
 

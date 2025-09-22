@@ -112,7 +112,9 @@ void STTProcessor::process() {
         audio_->get(vad_capture_ms_, audio);
         
         if (!audio.empty()) {
-            // Transcribe audio directly
+            AudioChunkMessage audio_msg; // For stats
+            
+            // Then transcribe the audio
             std::string transcribed_text;
             bool success = stt_->transcribe(audio, transcribed_text);
             
@@ -125,7 +127,12 @@ void STTProcessor::process() {
                     // Queue was shut down, stop processing
                     return;
                 } else {
-                    mark_processed();
+#ifdef ENABLE_STATS_LOGGING
+                    auto n = stats_.messages_processed++;
+                    stats_.avg_processing_time = std::chrono::milliseconds(
+                        (stats_.avg_processing_time.count() * (n - 1) + audio_msg.age().count()) / n
+                    );
+#endif
                     std::cout << "[STTProcessor] → " << transcribed_text << std::endl;
                 }
             }
@@ -228,7 +235,12 @@ void LLMProcessor::process() {
                     // Queue was shut down, stop processing
                     return;
                 } else {
-                    mark_processed();
+#ifdef ENABLE_STATS_LOGGING
+                    auto n = stats_.messages_processed++;
+                    stats_.avg_processing_time = std::chrono::milliseconds(
+                        (stats_.avg_processing_time.count() * (n - 1) + input_msg.age().count()) / n
+                    );
+#endif
                     std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
                 }
             });
@@ -329,7 +341,12 @@ void TTSProcessor::process() {
                 // Queue was shut down, stop processing
                 return;
             } else {
-                mark_processed();
+#ifdef ENABLE_STATS_LOGGING
+                auto n = stats_.messages_processed++;
+                stats_.avg_processing_time = std::chrono::milliseconds(
+                    (stats_.avg_processing_time.count() * (n - 1) + text_msg.age().count()) / n
+                );
+#endif
                 std::cout << "[TTSProcessor] Queued audio chunk with " << audio_chunk.audio_data.size() 
                           << " samples at " << audio_chunk.sample_rate << " Hz" << std::endl;
             }
@@ -364,8 +381,6 @@ void TTSProcessor::interrupt_current_speech() {
         std::cout << "[TTSProcessor] Using immediate audio interruption" << std::endl;
         audio_output_processor_->interrupt_audio_immediately();
     }
-    
-    // TTS backends no longer support interrupt since they generate audio synchronously
 }
 
 // AudioOutputProcessor implementation
@@ -414,6 +429,17 @@ void AudioOutputProcessor::process() {
         // External interrupt requested, continue to check control messages
         return;
     }
+}
+
+bool AudioOutputProcessor::handle_control_message(const ControlMessage& msg) {
+    if (msg.type == ControlMessage::SHUTDOWN) {
+        // Ensure audio device is properly closed before shutdown
+        std::cout << "[AudioOutputProcessor] Handling SHUTDOWN signal, closing audio device..." << std::endl;
+        close_audio_device();
+        std::cout << "[AudioOutputProcessor] Cleanup completed" << std::endl;
+        return true; // Handled
+    }
+    return false; // Not handled, use default behavior
 }
 
 void AudioOutputProcessor::cleanup() {
@@ -485,6 +511,7 @@ bool AudioOutputProcessor::init_audio_device() {
 
 void AudioOutputProcessor::close_audio_device() {
     if (alsa_handle_) {
+        // Drain any remaining audio data
         snd_pcm_drain(alsa_handle_);
         snd_pcm_close(alsa_handle_);
         alsa_handle_ = nullptr;
