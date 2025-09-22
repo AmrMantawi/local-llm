@@ -145,7 +145,21 @@ if(NOT nlohmann_json_FOUND)
     message(FATAL_ERROR "nlohmann/json is required for configuration file loading.")
 endif()
 
-# set(CMAKE_BUILD_TYPE Debug)
+# Set default build type to Release for performance
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Add optimization flags based on build type
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    # Release optimizations
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG -march=native")
+    message(STATUS "Building in Release mode with optimizations")
+elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # Debug flags
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    message(STATUS "Building in Debug mode")
+endif()
 
 # stt, tts, and llm options
 option(USE_WHISPER   "Enable whisper.cpp for STT"   ON)

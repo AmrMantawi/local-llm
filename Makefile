@@ -6,24 +6,31 @@
 # Default target
 help:
 	@echo "Local LLM - Available targets:"
-	@echo "  build    - Build the project"
-	@echo "  debug    - Build with stats logging enabled"
+	@echo "  build    - Build in Release mode (optimized, default)"
+	@echo "  release  - Build in Release mode (explicit)"
+	@echo "  debug    - Build in Debug mode with stats logging"
 	@echo "  clean    - Clean build artifacts"
 	@echo "  setup    - Run setup script"
 	@echo "  run      - Build and run the application"
 	@echo "  test     - Run tests (if available)"
 
-# Build the project
+# Build the project (Release mode by default)
 build:
-	@echo "🔨 Building project..."
+	@echo "🔨 Building project in Release mode with optimizations..."
 	mkdir -p build
-	cd build && cmake .. && make -j$(shell nproc)
+	cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(shell nproc)
 
-# Build with debug stats enabled
+# Build in Debug mode
 debug:
-	@echo "🐛 Building with stats logging enabled..."
+	@echo "🐛 Building in Debug mode with stats logging enabled..."
 	mkdir -p build
-	cd build && cmake -DENABLE_STATS_LOGGING=ON .. && make -j$(shell nproc)
+	cd build && cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_STATS_LOGGING=ON .. && make -j$(shell nproc)
+
+# Build in Release mode explicitly
+release:
+	@echo "⚡ Building in Release mode with maximum optimizations..."
+	mkdir -p build
+	cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(shell nproc)
 
 # Clean build artifacts
 clean:
