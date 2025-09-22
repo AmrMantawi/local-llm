@@ -1,16 +1,19 @@
 # Local LLM
 
-A complete local AI assistant with Speech-to-Text (STT), Large Language Model (LLM), and Text-to-Speech (TTS) capabilities. Run entirely on your machine with no cloud dependencies.
+A complete local AI assistant with Speech-to-Text (STT), Large Language Model (LLM), and Text-to-Speech (TTS) capabilities. Features a high-performance multi-threaded async pipeline architecture for real-time voice interaction.
 
 ## 🚀 Features
 
-- **Speech-to-Text**: Whisper-based transcription (configurable backends)
-- **Language Model**: Llama-based text generation with GGUF model support (configurable backends)
-- **Text-to-Speech**: Multiple TTS backends (Paroli, Piper) with ONNX support
-- **Voice Activity Detection**: Automatic speech detection
-- **Cross-platform**: Linux, macOS, Windows (WSL)
-- **Privacy-first**: Everything runs locally
-- **Modular**: Mix and match different backends for each component
+- **Real-time Voice Assistant**: Full Audio → STT → LLM → TTS pipeline
+- **Multi-threaded Architecture**: Parallel processing with thread-safe queues
+- **Multiple Pipeline Modes**: Voice assistant, text-only, transcription, synthesis
+- **Speech-to-Text**: Whisper-based transcription with Voice Activity Detection (VAD)
+- **Language Model**: Llama-based text generation with GGUF model support
+- **Text-to-Speech**: Paroli TTS with ONNX neural voice synthesis
+- **Server Mode**: Unix socket server for integration with other applications
+- **Cross-platform**: Linux, Windows (WSL)
+- **Privacy-first**: Everything runs locally, no cloud dependencies
+- **Performance Optimized**: Release builds with -O3 optimizations and native CPU targeting
 
 ## 📋 Requirements
 
@@ -18,18 +21,14 @@ A complete local AI assistant with Speech-to-Text (STT), Large Language Model (L
 - **CMake** 3.16+
 - **SDL2** development libraries
 - **Python** 3.7+
-- **ALSA** (Linux) or **Core Audio** (macOS)
-- **ONNX Runtime** (bundled with Paroli TTS)
+- **ALSA** (Linux)
+- **ONNX Runtime** (automatically downloaded)
+- **nlohmann/json** (automatically downloaded)
 
 ### Ubuntu/Debian
 ```bash
 sudo apt-get update
-sudo apt-get install cmake libsdl2-dev python3 python3-pip python3-venv alsa-utils
-```
-
-### macOS
-```bash
-brew install cmake sdl2 python3
+sudo apt-get install cmake libsdl2-dev alsa-utils
 ```
 
 ## 🛠️ Quick Setup
@@ -42,190 +41,248 @@ brew install cmake sdl2 python3
 
 2. **Run the setup script:**
    ```bash
-   chmod +x scripts/setup.sh
-   ./scripts/setup.sh
+   make setup
    ```
 
 3. **Download models:**
    - **STT**: Download Whisper models from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp)
    - **LLM**: Download GGUF models from [Hugging Face](https://huggingface.co/models?search=gguf)
-   - **TTS**: 
-     - **Paroli**: Download models (encoder.onnx, decoder.onnx, config.json) from [Paroli releases](https://github.com/paroli-ai/paroli-daemon/releases)
-     - **Piper**: Download models from [Hugging Face](https://huggingface.co/rhasspy/piper-voices)
+   - **TTS**: Download Paroli models (encoder.onnx, decoder.onnx, config.json) from [Paroli releases](https://github.com/paroli-ai/paroli-daemon/releases)
 
 4. **Place models in the correct directories:**
    ```
    models/
    ├── stt/     # .bin files (Whisper)
    ├── llm/     # .gguf files (Llama)
-   └── tts/     # .onnx files (Paroli/Piper) + config.json + piper_phonemize/
+   └── tts/     # .onnx files (Paroli) + config.json + espeak-ng-data/
    ```
 
-5. **Run the application:**
+5. **Build and run:**
    ```bash
-   # Microphone mode (interactive voice chat)
-   ./build/local-llm --mode mic --config config/models.json
+   # Build optimized release version
+   make build
    
-   # Server mode (Unix socket server)
-   ./build/local-llm --mode server --config config/models.json
+   # Run in CLI mode (voice assistant)
+   make run
+   
+   # Or run server mode
+   ./build/local-llm --server --socket /run/local-llm.sock
    ```
-
-## 🔌 Backend Options
-
-The project supports multiple backends for each component (STT, LLM, TTS). You can configure which backends to use during the build process.
-
-### Speech-to-Text (STT) Backends
-
-**Whisper (Default):**
-- **Description**: High-quality speech recognition using OpenAI's Whisper model
-- **Model Format**: `.bin` files (GGML format)
-- **Build Option**: `-DUSE_WHISPER=ON`
-- **Model Sources**: [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp)
-- **Usage**: `cmake -B build -DUSE_WHISPER=ON`
-
-### Language Model (LLM) Backends
-
-**Llama (Default):**
-- **Description**: Large language model inference using llama.cpp
-- **Model Format**: `.gguf` files (GGUF format)
-- **Build Option**: `-DUSE_LLAMA=ON`
-- **Model Sources**: [Hugging Face](https://huggingface.co/models?search=gguf)
-- **Usage**: `cmake -B build -DUSE_LLAMA=ON`
-
-**RKLLM (Alternative):**
-- **Description**: Rockchip LLM backend for embedded devices
-- **Model Format**: RKLLM-specific format
-- **Build Option**: `-DUSE_RKLLM=ON`
-- **Usage**: `cmake -B build -DUSE_RKLLM=ON -DUSE_LLAMA=OFF`
-
-### Text-to-Speech (TTS) Backends
-
-**Paroli (Default):**
-- **Description**: ONNX-based neural TTS with high-quality voice synthesis
-- **Model Format**: `.onnx` files + `config.json`
-- **Build Option**: `-DUSE_Paroli=ON`
-- **Model Sources**: [Paroli releases](https://github.com/paroli-ai/paroli-daemon/releases)
-- **Dependencies**: ONNX Runtime, piper-phonemize
-- **Usage**: `cmake -B build -DUSE_Paroli=ON -DUSE_Piper=OFF`
-
-**Piper (Alternative):**
-- **Description**: Fast neural TTS with good quality
-- **Model Format**: `.onnx` files
-- **Build Option**: `-DUSE_Piper=ON`
-- **Model Sources**: [Hugging Face](https://huggingface.co/rhasspy/piper-voices)
-- **Usage**: `cmake -B build -DUSE_Paroli=OFF -DUSE_Piper=ON`
-
-### Example Build Configurations
-
-**Default Configuration (Whisper + Llama + Paroli):**
-```bash
-cmake -B build -DUSE_WHISPER=ON -DUSE_LLAMA=ON -DUSE_Paroli=ON -DUSE_Piper=OFF
-```
-
-**Alternative Configuration (Whisper + Llama + Piper):**
-```bash
-cmake -B build -DUSE_WHISPER=ON -DUSE_LLAMA=ON -DUSE_Paroli=OFF -DUSE_Piper=ON
-```
-
-**Embedded Configuration (Whisper + RKLLM + Paroli):**
-```bash
-cmake -B build -DUSE_WHISPER=ON -DUSE_LLAMA=OFF -DUSE_RKLLM=ON -DUSE_Paroli=ON
-```
 
 ## 🎯 Usage
 
-### Microphone Mode
-1. **Start the application** - it will initialize all backends
-2. **Speak into your microphone** - voice activity detection will capture your speech
-3. **Wait for transcription** - Whisper will convert speech to text
-4. **Get AI response** - Llama will generate a response
-5. **Hear the response** - Paroli will speak the response back to you
+### CLI Mode (Voice Assistant)
+Interactive voice chat with real-time processing:
+1. **Start the application** - initializes all components in parallel threads
+2. **Speak into your microphone** - VAD automatically detects speech
+3. **Wait for transcription** - Whisper converts speech to text
+4. **Get AI response** - Llama generates contextual response
+5. **Hear the response** - Paroli synthesizes and plays audio
 
 ### Server Mode
-The application can also run as a Unix socket server for integration with other applications.
+Unix socket server for integration with other applications:
+```bash
+./build/local-llm --server --socket /run/local-llm.sock
+```
+
+### Command Line Options
+```bash
+./build/local-llm [options]
+
+Options:
+  --server              Run in server mode (default: CLI mode)
+  --config PATH         Path to models.json config file
+  --socket PATH         Unix socket path for server mode
+  --help, -h            Show help message
+```
 
 **Controls:**
-- Press `Ctrl+C` to exit gracefully
+- Press `Ctrl+C` to exit gracefully (proper cleanup of all threads and audio devices)
+
+## 🏗️ Architecture
+
+### Multi-threaded Pipeline
+The system uses a sophisticated async pipeline architecture:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  STTProcessor   │───▶│  LLMProcessor   │───▶│  TTSProcessor   │───▶│AudioOutputProc │
+│  (Audio→Text)   │    │  (Text→Text)    │    │  (Text→Audio)   │    │  (Audio Play)  │
+│  SDL2 + Whisper │    │  Llama.cpp      │    │  Paroli TTS     │    │  ALSA Output   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+### Pipeline Modes
+- **VOICE_ASSISTANT**: Full Audio → STT → LLM → TTS chain
+- **TEXT_ONLY**: LLM only for server mode
+- **TRANSCRIPTION**: Audio → STT → Text
+- **SYNTHESIS**: Text → TTS → Audio
+
+### Performance Optimizations
+- **Thread-safe Queues**: Bounded queues with interrupt support
+- **Signal-based Control**: Immediate interruption and graceful shutdown
+- **Memory Management**: RAII with smart pointers, move semantics
+- **Audio Optimization**: Low-latency ALSA with immediate interruption
+- **GPU Support**: Llama supports GPU layer offloading
+- **Release Optimizations**: -O3, -march=native, -DNDEBUG by default
 
 ## 📁 Project Structure
 
 ```
 local-llm/
-├── include/           # Header files
-│   ├── stt.h         # STT interface
-│   ├── llm.h         # LLM interface
-│   ├── tts.h         # TTS interface
-│   └── ...           # Implementation headers
-├── src/              # Source files
-│   ├── main.cpp      # Main application
-│   ├── stt_whisper.cpp
-│   ├── llm_llama.cpp
-│   ├── tts_paroli.cpp
-│   ├── tts_piper.cpp
-│   └── server.cpp
-├── scripts/          # Utility scripts
-│   ├── setup.sh      # Setup script
-│   └── speak         # TTS script
-├── config/           # Configuration files
-│   └── models.json   # Model paths and settings
-├── models/           # Model files (not in git)
-│   ├── llm/         # GGUF language models
-│   ├── tts/         # TTS ONNX models (Paroli/Piper) + config
-│   └── stt/         # Whisper models
-├── third_party/      # External dependencies
-└── build/           # Build artifacts (not in git)
+├── include/                    # Header files
+│   ├── async_pipeline.h        # Core async pipeline framework
+│   ├── async_processors.h      # Processor implementations
+│   ├── pipeline_manager.h      # Pipeline coordination
+│   ├── async_pipeline_factory.h # Factory for pipeline creation
+│   ├── stt.h                   # STT interface
+│   ├── llm.h                   # LLM interface
+│   ├── tts.h                   # TTS interface
+│   ├── stt_whisper.h           # Whisper STT implementation
+│   ├── llm_llama.h             # Llama LLM implementation
+│   ├── tts_paroli.h            # Paroli TTS implementation
+│   └── config_manager.h        # Configuration management
+├── src/                        # Source files
+│   ├── main.cpp                # Main application entry point
+│   ├── async_pipeline_factory.cpp # Pipeline factory implementation
+│   ├── async_processors.cpp    # Processor implementations
+│   ├── stt_whisper.cpp         # Whisper STT backend
+│   ├── llm_llama.cpp           # Llama LLM backend
+│   ├── tts_paroli.cpp          # Paroli TTS backend
+│   ├── common.cpp              # Utility functions
+│   └── common-sdl.cpp          # SDL audio utilities
+├── scripts/                    # Utility scripts
+│   └── setup.sh                # Setup script
+├── config/                     # Configuration files
+│   └── models.json             # Model paths and settings
+├── models/                     # Model files (not in git)
+│   ├── llm/                    # GGUF language models
+│   ├── tts/                    # TTS ONNX models + config
+│   └── stt/                    # Whisper models
+├── third_party/                # External dependencies
+│   ├── llama.cpp/              # Llama.cpp library
+│   └── paroli-daemon/          # Paroli TTS library
+├── deps/                       # Downloaded dependencies
+│   ├── onnxruntime-*/          # ONNX Runtime
+│   └── piper_phonemize/        # Piper phonemization
+├── CMakeLists.txt              # CMake build configuration
+├── Makefile                    # Convenient build targets
+└── build/                      # Build artifacts (not in git)
 ```
 
 ## ⚙️ Configuration
 
-You can pass a custom config with `--config /path/to/models.json`. If omitted, the default is `/usr/share/local-llm/config/models.json`.
-
+### Configuration File
 Edit `config/models.json` to customize:
 - Model file paths
 - Audio settings (sample rate, buffer size, VAD parameters)
+- LLM parameters (context size, GPU layers, sampling)
 - TTS voice settings
 
-**Notes:**
-- Relative model paths inside `models.json` are resolved relative to the config file's directory.
-- The default configuration uses Paroli TTS with ONNX models.
-- Model file paths
-- Audio settings
-- TTS voice settings
+### Build Configuration
+The project uses CMake with the following options:
+
+**Backend Selection:**
+- `-DUSE_WHISPER=ON` - Enable Whisper STT (default)
+- `-DUSE_LLAMA=ON` - Enable Llama LLM (default)
+- `-DUSE_Paroli=ON` - Enable Paroli TTS (default)
+- `-DUSE_RKLLM=ON` - Enable RKLLM for embedded devices
+
+**Build Options:**
+- `-DCMAKE_BUILD_TYPE=Release` - Optimized release build (default)
+- `-DCMAKE_BUILD_TYPE=Debug` - Debug build with symbols
+- `-DENABLE_STATS_LOGGING=ON` - Enable performance statistics
 
 ## 🔧 Development
 
-### Building from source:
+### Building
+```bash
+# Build optimized release version (default)
+make build
+
+# Build debug version with stats
+make debug
+
+# Clean build artifacts
+make clean
+
+# Show all available targets
+make help
+```
+
+### Manual CMake Build
 ```bash
 mkdir build && cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
-### TTS Backend Options:
-The project supports multiple TTS backends:
-
-**Paroli (Default):**
+### Performance Profiling
 ```bash
-cmake -B build -DUSE_Paroli=ON -DUSE_Piper=OFF
+# Build with statistics logging
+make debug
+
+# Run with profiling
+./build/local-llm
+# Statistics will be printed on shutdown
 ```
 
-**Piper (Alternative):**
+### Adding New Backends
+1. Create interface header in `include/` (e.g., `stt_new.h`)
+2. Implement backend class in `src/` (e.g., `stt_new.cpp`)
+3. Add CMake option in `CMakeLists.txt`
+4. Update `async_pipeline_factory.cpp` to include new backend
+5. Add conditional compilation with `#ifdef USE_NEW_BACKEND`
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Audio Issues:**
+- Ensure ALSA is properly configured: `aplay -l`
+- Check microphone permissions
+- Try different audio devices in config
+
+**Performance Issues:**
+- Enable GPU acceleration in Llama config
+- Use optimized models (quantized GGUF)
+- Build in Release mode: `make build`
+
+**Build Issues:**
+- Ensure all dependencies are installed
+- Clean build: `make clean && make build`
+- Check CMake version (3.16+ required)
+
+### Debug Mode
 ```bash
-cmake -B build -DUSE_Paroli=OFF -DUSE_Piper=ON
+# Build with debug symbols and stats
+make debug
+
+# Run with verbose output
+./build/local-llm --config config/models.json
 ```
 
-### Adding new backends:
-1. Create header file in `include/`
-2. Create implementation in `src/`
-3. Add CMake option and conditional compilation
-4. Update main.cpp to include new backend
+## 📊 Performance
+
+### Optimizations Included
+- **Compiler**: -O3 optimizations with native CPU targeting
+- **Threading**: Parallel processing with hardware-concurrency awareness
+- **Memory**: RAII, move semantics, smart pointers
+- **Audio**: Low-latency ALSA with immediate interruption
+- **GPU**: Optional GPU acceleration for LLM inference
+
+### Expected Performance
+- **Audio Latency**: <100ms end-to-end
+- **STT Processing**: Real-time transcription
+- **LLM Generation**: Depends on model size and hardware
+- **TTS Synthesis**: Real-time audio generation
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch: `git checkout -b feature-name`
 3. Make your changes
-4. Add tests if applicable
+4. Test with both debug and release builds
 5. Submit a pull request
 
 ## 📄 License
@@ -237,5 +294,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for STT
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) for LLM
 - [Paroli](https://github.com/paroli-ai/paroli-daemon) for TTS
-- [Piper](https://github.com/rhasspy/piper) for TTS
-
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) for TTS acceleration
