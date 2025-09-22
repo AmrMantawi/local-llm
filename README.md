@@ -20,7 +20,6 @@ A complete local AI assistant with Speech-to-Text (STT), Large Language Model (L
 ### System Dependencies
 - **CMake** 3.16+
 - **SDL2** development libraries
-- **Python** 3.7+
 - **ALSA** (Linux)
 - **ONNX Runtime** (automatically downloaded)
 - **nlohmann/json** (automatically downloaded)
