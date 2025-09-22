@@ -83,6 +83,7 @@ protected:
     bool initialize() override;
     void process() override;
     void cleanup() override;
+    bool handle_control_message(const ControlMessage& msg) override;
 
 private:
     SafeQueue<AudioChunkMessage>& input_queue_;

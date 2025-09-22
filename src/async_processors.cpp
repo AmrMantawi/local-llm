@@ -364,10 +364,25 @@ void TTSProcessor::process() {
 }
 
 void TTSProcessor::cleanup() {
-    // Stop internal audio output processor first
+    // Ensure audio playback is interrupted and the output queue is unblocked
+    if (audio_output_processor_) {
+        // Stop any ongoing ALSA playback and flush pending chunks
+        audio_output_processor_->interrupt_audio_immediately();
+    }
+
+    if (audio_output_queue_) {
+        // Wake any blocking pop() in AudioOutputProcessor
+        audio_output_queue_->shutdown();
+    }
+
+    // Now stop the internal audio output processor thread cleanly
     if (audio_output_processor_) {
         audio_output_processor_->stop();
         audio_output_processor_.reset();
+    }
+    // Release the queue after the processor has been stopped
+    if (audio_output_queue_) {
+        audio_output_queue_.reset();
     }
     
     if (tts_) {
