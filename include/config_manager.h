@@ -84,7 +84,7 @@ public:
     }
     
     std::string getTTSModelPath(const std::string& component = "") const {
-#ifdef USE_Paroli
+#ifdef USE_PAROLI
         if (component.empty()) {
             // Return encoder path as the primary model
             return getNestedModelPath("tts", "paroli", "encoder");
@@ -106,7 +106,7 @@ public:
     
     ParoliPaths getParoliModelPaths() const {
         ParoliPaths paths;
-#ifdef USE_Paroli
+#ifdef USE_PAROLI
         paths.encoder = getNestedModelPath("tts", "paroli", "encoder");
         paths.decoder = getNestedModelPath("tts", "paroli", "decoder");
         paths.config = getNestedModelPath("tts", "paroli", "config");

@@ -11,7 +11,7 @@
 #include "llm_llama.h"
 #endif
 
-#ifdef USE_Paroli
+#ifdef USE_PAROLI
 #include "tts_paroli.h"
 #endif
 
@@ -52,11 +52,11 @@ public:
     }
     
     static std::unique_ptr<ITTS> create_tts_backend() {
-#ifdef USE_Paroli
+#ifdef USE_PAROLI
         auto tts = std::make_unique<TTSParoli>();
         return tts;
 #else
-        std::cerr << "[PipelineFactory] No TTS backend available (USE_Paroli not defined)" << std::endl;
+        std::cerr << "[PipelineFactory] No TTS backend available (USE_PAROLI not defined)" << std::endl;
         return nullptr;
 #endif
     }

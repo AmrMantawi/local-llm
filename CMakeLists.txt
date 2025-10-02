@@ -21,57 +21,6 @@ function(detect_platform)
     endif()
 endfunction()
 
-# Function to download and extract ONNX Runtime
-function(download_onnxruntime)
-    detect_platform()
-    set(ORT_VERSION "1.15.0")
-    set(ORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-${PLATFORM_OS}-${PLATFORM_ARCH}-${ORT_VERSION}")
-    
-    if(NOT EXISTS "${ORT_DIR}/include")
-        message(STATUS "Downloading ONNX Runtime ${ORT_VERSION} for ${PLATFORM_OS}-${PLATFORM_ARCH}")
-        
-        if(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "x64")
-            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz")
-            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-linux-x64-${ORT_VERSION}.tgz")
-        elseif(PLATFORM_OS STREQUAL "linux" AND PLATFORM_ARCH STREQUAL "arm64")
-            set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
-            set(ORT_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/deps/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz")
-        else()
-            message(FATAL_ERROR "Unsupported platform ${PLATFORM_OS}-${PLATFORM_ARCH} for ONNX Runtime auto-download")
-        endif()
-        
-        # Create deps directory if it doesn't exist
-        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/deps")
-        
-        # Download the archive using CMake's built-in download
-        file(DOWNLOAD "${ORT_URL}" "${ORT_ARCHIVE}" 
-             STATUS DOWNLOAD_STATUS
-             SHOW_PROGRESS)
-        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
-        
-        if(DOWNLOAD_RESULT EQUAL 0)
-            # Extract the archive (Linux uses .tgz files)
-            execute_process(
-                COMMAND tar -xzf "${ORT_ARCHIVE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/deps"
-                RESULT_VARIABLE EXTRACT_RESULT
-            )
-            
-            if(EXTRACT_RESULT EQUAL 0)
-                # Clean up the archive
-                file(REMOVE "${ORT_ARCHIVE}")
-                message(STATUS "Successfully downloaded and extracted ONNX Runtime")
-            else()
-                message(FATAL_ERROR "Failed to extract ONNX Runtime archive")
-            endif()
-        else()
-            message(FATAL_ERROR "Failed to download ONNX Runtime from ${ORT_URL}")
-        endif()
-    else()
-        message(STATUS "ONNX Runtime already available at ${ORT_DIR}")
-    endif()
-    
-    set(ORT_ROOT "${ORT_DIR}" PARENT_SCOPE)
-endfunction()
 
 # Function to download and extract piper-phonemize
 function(download_piper_phonemize)
@@ -120,8 +69,15 @@ function(download_piper_phonemize)
     else()
         message(STATUS "piper-phonemize already available at ${PIPER_DIR}")
     endif()
-    
-    set(PIPER_PHONEMIZE_ROOT "${PIPER_DIR}" PARENT_SCOPE)
+
+    include_directories(${PIPER_DIR}/include)
+    link_directories(${PIPER_DIR}/lib)
+
+    if(NOT DEFINED ESPEAK_NG_DATA_DIR)
+        set(ESPEAK_NG_DATA_DIR "${PIPER_DIR}/share/espeak-ng-data" PARENT_SCOPE)
+    else()
+        message(STATUS "ESPEAK_NG_DATA_DIR already defined as ${ESPEAK_NG_DATA_DIR}")
+    endif()
 endfunction()
 
 # Find nlohmann/json
@@ -153,8 +109,30 @@ endif()
 # Add optimization flags based on build type
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     # Release optimizations
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG -march=native")
-    message(STATUS "Building in Release mode with optimizations")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+    
+    # Smart CPU optimization detection
+    if(CMAKE_CROSSCOMPILING)
+        # Cross-compiling: use generic optimizations for target architecture
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+            if(AARCH64_MCPU)
+                set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mcpu=${AARCH64_MCPU}")
+                message(STATUS "Building in Release mode with ARM64 optimizations: -mcpu=${AARCH64_MCPU} (cross-compiling)")
+            else()
+                message(STATUS "Building in Release mode with generic ARM64 optimizations (cross-compiling)")
+            endif()
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=x86-64")
+            message(STATUS "Building in Release mode with x86_64 optimizations (cross-compiling)")
+        else()
+            message(STATUS "Building in Release mode with generic optimizations (cross-compiling)")
+        endif()
+    else()
+        # Native compilation: use native CPU features
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+        message(STATUS "Building in Release mode with native CPU optimizations")
+    endif()
+    
 elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Debug flags
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
@@ -165,10 +143,10 @@ endif()
 option(USE_WHISPER   "Enable whisper.cpp for STT"   ON)
 option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
 option(USE_LLAMA     "Enable llama.cpp for LLM"     ON)
-option(USE_Paroli    "Enable Paroli for TTS"        ON)
+option(USE_PAROLI    "Enable Paroli for TTS"        ON)
 
 # Statistics and monitoring options
-option(ENABLE_STATS "Enable pipeline statistics logging and monitoring" OFF)
+option(ENABLE_STATS_LOGGING "Enable pipeline statistics logging and monitoring" OFF)
 
 find_package(SDL2 REQUIRED)
 find_package(ALSA REQUIRED)
@@ -183,6 +161,11 @@ set(SOURCES
     src/async_processors.cpp
 )
 
+# Statistics logging compile definition
+if(ENABLE_STATS_LOGGING)
+    add_definitions(-DENABLE_STATS_LOGGING)
+endif()
+
 if(USE_WHISPER)
     add_compile_definitions(STT_BACKEND=WhisperSTT)
     add_definitions(-DUSE_WHISPER)
@@ -191,11 +174,6 @@ if(USE_WHISPER)
     list(APPEND EXTRA_LIBS whisper)
 else()
     message(FATAL_ERROR "No STT backend selected")
-endif()
-
-# Statistics logging compile definition
-if(ENABLE_STATS_LOGGING)
-    add_definitions(-DENABLE_STATS_LOGGING)
 endif()
 
 if(USE_LLAMA)
@@ -208,16 +186,12 @@ else()
     message(FATAL_ERROR "No LLM backend selected")
 endif()
 
-# Add paroli-daemon subdirectory if using Paroli TTS
-if(USE_Paroli)
-    # Automatically download ONNX Runtime and piper-phonemize if not available
-    download_onnxruntime()
+if(USE_PAROLI)
+    # Automatically download piper-phonemize (includes ONNX Runtime 1.14.1)
     download_piper_phonemize()
-    
-    # Set the paths (these are set by the download functions)
-    set(ORT_ROOT "${ORT_ROOT}" CACHE STRING "Path to ONNX Runtime root directory")
-    set(PIPER_PHONEMIZE_ROOT "${PIPER_PHONEMIZE_ROOT}" CACHE STRING "Path to piper-phonemize root directory (used by Paroli)")
 
+    add_compile_definitions(ESPEAK_NG_DATA_DIR="${ESPEAK_NG_DATA_DIR}")
+    
     # Ensure CMake can find custom Find*.cmake modules provided by paroli-daemon
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/cmake")
 
@@ -227,33 +201,28 @@ if(USE_Paroli)
     # Add include directories for paroli-daemon
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/paroli-daemon)
-endif()
 
-if(USE_Paroli)
+    # Add compile definitions
     add_compile_definitions(TTS_BACKEND=TTSParoli)
-    add_definitions(-DUSE_Paroli)
+    add_definitions(-DUSE_PAROLI)
     list(APPEND SOURCES src/tts_paroli.cpp)
 else()
     message(FATAL_ERROR "No TTS backend selected")
 endif()
 
+# Link libraries and directories
 add_executable(local-llm ${SOURCES})
 target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${ALSA_INCLUDE_DIRS} ${nlohmann_json_INCLUDE_DIRS})
-# Ensure Paroli headers (and ORT/piper-phonemize headers) are visible when compiling local sources
-if(USE_Paroli)
+target_link_libraries(local-llm PRIVATE ${EXTRA_LIBS} ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} pthread)
+if(USE_LLAMA)
+    target_link_libraries(local-llm PRIVATE llama)
+endif()
+if(USE_WHISPER)
+    target_link_libraries(local-llm PRIVATE whisper)
+endif()
+if(USE_PAROLI)
     target_include_directories(local-llm PRIVATE
-        ${ORT_ROOT}/include
-        ${PIPER_PHONEMIZE_ROOT}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/paroli-daemon)
-endif()
-target_link_libraries(local-llm PRIVATE whisper llama ${EXTRA_LIBS} ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} pthread)
-if(USE_Paroli)
-    # Ensure ONNX Runtime is linked and library paths are available to the final executable
-    target_link_directories(local-llm PRIVATE ${ORT_ROOT}/lib ${PIPER_PHONEMIZE_ROOT}/lib)
-    target_link_libraries(local-llm PRIVATE onnxruntime)
-    # Optionally embed rpath so running without env vars works
-    set_target_properties(local-llm PROPERTIES
-        BUILD_RPATH "${ORT_ROOT}/lib;${PIPER_PHONEMIZE_ROOT}/lib"
-        INSTALL_RPATH "${ORT_ROOT}/lib;${PIPER_PHONEMIZE_ROOT}/lib")
+    target_link_libraries(local-llm PRIVATE onnxruntime piper_phonemize)
 endif()

@@ -22,7 +22,12 @@ bool TTSParoli::init() {
     encoder_path = paroli_paths.encoder;
     decoder_path = paroli_paths.decoder;
     config_path = paroli_paths.config;
-    espeak_data_path = "deps/piper_phonemize/share/espeak-ng-data";
+#ifdef ESPEAK_NG_DATA_DIR
+    espeak_data_path = ESPEAK_NG_DATA_DIR;
+    std::cout << "ESPEAK_NG_DATA_DIR defined as: " << ESPEAK_NG_DATA_DIR << std::endl;
+#else
+    std::cout << "ESPEAK_NG_DATA_DIR not defined" << std::endl;
+#endif
     
     // Check if model files exist
     if (!std::filesystem::exists(encoder_path)) {

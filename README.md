@@ -184,7 +184,7 @@ The project uses CMake with the following options:
 **Backend Selection:**
 - `-DUSE_WHISPER=ON` - Enable Whisper STT (default)
 - `-DUSE_LLAMA=ON` - Enable Llama LLM (default)
-- `-DUSE_Paroli=ON` - Enable Paroli TTS (default)
+- `-DUSE_PAROLI=ON` - Enable Paroli TTS (default)
 - `-DUSE_RKLLM=ON` - Enable RKLLM for embedded devices
 
 **Build Options:**
