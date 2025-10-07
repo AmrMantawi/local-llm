@@ -3,6 +3,31 @@
 
 namespace async_pipeline {
 
+// Helper functions
+inline void fade_and_trim_tail_ms(AudioChunkMessage& m, double fade_ms, double fade_strength, int channels = 1) {
+    if (fade_ms <= 0 || m.sample_rate == 0 || channels <= 0) return;
+
+    const size_t per_ch = static_cast<size_t>(std::llround(fade_ms * m.sample_rate / 1000.0));
+    const size_t total  = per_ch * static_cast<size_t>(channels);
+    if (total == 0 || total >= m.audio_data.size()) { 
+        m.audio_data.clear(); 
+        return; 
+    }
+
+    // Map fade_strength [0–100] → curve exponent [1–5]
+    float exponent = 1.0f + (fade_strength / 25.0f); // e.g. 0→1.0, 100→5.0
+    const size_t start = m.audio_data.size() - total;
+
+    for (size_t i = 0; i < total; ++i) {
+        float t = static_cast<float>(i + 1) / static_cast<float>(total);
+        float g = std::pow(1.0f - t, exponent);
+        int32_t v = static_cast<int32_t>(std::lround(m.audio_data[start + i] * g));
+        m.audio_data[start + i] = static_cast<int16_t>(std::clamp(v, -32768, 32767));
+    }
+
+    m.audio_data.resize(start); // trim off faded tail
+}
+
 // STTProcessor implementation
 STTProcessor::STTProcessor(SafeQueue<TextMessage>& output_queue, std::unique_ptr<ISTT> stt_backend)
     : BaseProcessor("STTProcessor"), output_queue_(output_queue),
@@ -336,6 +361,7 @@ void TTSProcessor::process() {
         bool success = tts_->speak(text_msg.text, audio_chunk);
         
         if (success && !audio_chunk.audio_data.empty()) {
+            fade_and_trim_tail_ms(audio_chunk, 325, 120);
             // Queue the audio chunk for playback with blocking push
             if (!audio_output_queue_->push_blocking(std::move(audio_chunk))) {
                 // Queue was shut down, stop processing
