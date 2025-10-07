@@ -9,7 +9,7 @@
 	url = https://github.com/rhasspy/piper.git
 [submodule "third_party/paroli-daemon"]
 	path = third_party/paroli-daemon
-	url = git@github.com:AmrMantawi/paroli-daemon.git
+	url = https://github.com/AmrMantawi/paroli-daemon.git
 [submodule "third_party/rknn-llm"]
 	path = third_party/rknn-llm
 	url = https://github.com/airockchip/rknn-llm.git
