@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include <sstream>
+#include <cctype>
 
 // Prompt template for the conversation - defines the chat format and personality
 const std::string k_prompt_llama = R"(Text transcript of a never ending dialog, where {0} interacts with an AI assistant named {1}.
@@ -413,9 +414,9 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
     // Main text generation loop with chunk-level streaming
     bool done = false;
     std::string text_to_speak;
-    std::string current_chunk;
-    std::string current_sentence;
+    std::string token_buffer;
     int word_count = 0;
+    bool in_word = false;
     
     while (true) {
         // Process input tokens if we have any
@@ -510,43 +511,42 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
                 // Convert token to text and add to response
                 std::string token_text = llama_token_to_piece(ctx, id);
                 text_to_speak += token_text;
-                current_chunk += token_text;
-                current_sentence += token_text;
+                token_buffer += token_text;
 
-                // Count words (tokens that contain letters and are followed by space or punctuation)
-                if (!token_text.empty() && std::isalpha(token_text[0])) {
-                    word_count++;
+                // Count completed words by tracking boundaries across characters
+                for (unsigned char uc : token_text) {
+                    const bool is_ws    = std::isspace(uc);
+                    const bool is_wchar = std::isalnum(uc) || uc == '\'' || uc >= 0x80; // treat non-ASCII as word chars
+                    const bool is_punct = (uc=='.'||uc=='!'||uc=='?'||uc==','||uc==';'||uc==':');
+
+                    if (is_wchar) {
+                        if (!in_word) in_word = true;   // word starts
+                    } else { // ws or punctuation
+                        if (in_word && (is_ws || is_punct)) { // word ends
+                            word_count++;
+                            in_word = false;
+                        }
+                    }
                 }
 
                 // Check for sentence completion (. ! ?)
-                bool sentence_ended = (token_text.find('.') != std::string::npos || 
-                                     token_text.find('!') != std::string::npos || 
-                                     token_text.find('?') != std::string::npos);
+                bool sentence_ended = (token_text.find('.') != std::string::npos ||
+                                       token_text.find('!') != std::string::npos ||
+                                       token_text.find('?') != std::string::npos);
 
-                // Send chunk every 3 words OR at sentence end
-                if (word_count >= 3 || sentence_ended) {
-                    // Trim whitespace and check if chunk has meaningful content
-                    std::string trimmed_chunk = current_chunk;
-                    // Remove leading/trailing whitespace
-                    size_t start = trimmed_chunk.find_first_not_of(" \t\n\r");
-                    if (start != std::string::npos) {
-                        size_t end = trimmed_chunk.find_last_not_of(" \t\n\r");
-                        trimmed_chunk = trimmed_chunk.substr(start, end - start + 1);
-                        
-                        // Only queue non-empty chunks with some meaningful content
-                        if (!trimmed_chunk.empty() && trimmed_chunk.length() > 2) {
-                            callback(trimmed_chunk);
-                        }
+                // Flush every ~3 words, or on sentence end, or when buffer is long
+                constexpr size_t MAX_BYTES = 96; // latency safety valve
+                if (word_count >= 4 || sentence_ended || token_buffer.size() >= MAX_BYTES) {
+                    callback(token_buffer);
+
+                    // Reset current chunk for next call
+                    token_buffer.clear();
+                    // Only reset in_word if we flushed on a sentence end. If we flushed
+                    // due to MAX_BYTES mid-word, keep in_word = true.
+                    if (sentence_ended) {
+                        in_word = false;
                     }
-                    
-                    // Reset current chunk for next one
-                    current_chunk.clear();
                     word_count = 0;
-                }
-
-                // If sentence ended, also reset sentence tracking
-                if (sentence_ended) {
-                    current_sentence.clear();
                 }
             }
         }
@@ -578,17 +578,9 @@ bool LlamaLLM::generate_async(const std::string &prompt, std::string &response,
     }
 
     // Handle any remaining text that hasn't been sent yet
-    if (!current_chunk.empty()) {
-        std::string trimmed_chunk = current_chunk;
-        size_t start = trimmed_chunk.find_first_not_of(" \t\n\r");
-        if (start != std::string::npos) {
-            size_t end = trimmed_chunk.find_last_not_of(" \t\n\r");
-            trimmed_chunk = trimmed_chunk.substr(start, end - start + 1);
-            
-            if (!trimmed_chunk.empty() && trimmed_chunk.length() > 2) {
-                callback(trimmed_chunk);
-            }
-        }
+    if (!token_buffer.empty()) {
+        callback(token_buffer);
+        token_buffer.clear();
     }
 
     // Set the final response

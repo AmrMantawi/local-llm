@@ -105,7 +105,8 @@ bool RknnLLM::generate_async(const std::string &prompt, std::string &response,
     // Set up async generation state
     current_response.clear();
     token_buffer.clear();
-    word_count = 0;
+    word_count  = 0;
+    in_word = false;
     async_callback = callback;
     
     // Prepare input for RKNN LLM
@@ -162,30 +163,55 @@ int RknnLLM::rknn_callback(RKLLMResult* result, void* userdata, LLMCallState sta
         // Accumulate tokens in buffer for chunking
         if (instance->async_callback) {
             instance->token_buffer += token_text;
-            
-            // Count words (tokens that contain letters and are followed by space or punctuation)
-            if (!token_text.empty() && std::isalpha(token_text[0])) {
-                instance->word_count++;
+
+            // Count completed words by tracking boundaries across characters
+            for (unsigned char uc : token_text) {
+                const bool is_ws    = std::isspace(uc);
+                const bool is_wchar = std::isalnum(uc) || uc == '\'' || uc >= 0x80; // treat non-ASCII as word chars
+                const bool is_punct = (uc=='.'||uc=='!'||uc=='?'||uc==','||uc==';'||uc==':');
+
+                if (is_wchar) {
+                    if (!instance->in_word) instance->in_word = true;   // word starts
+                } else { // ws or punctuation
+                    if (instance->in_word && (is_ws || is_punct)) {      // word ends
+                        instance->word_count++;
+                        instance->in_word = false;
+                    }
+                }
             }
 
             // Check for sentence completion (. ! ?)
-            bool sentence_ended = (token_text.find('.') != std::string::npos || 
-                                 token_text.find('!') != std::string::npos || 
-                                 token_text.find('?') != std::string::npos);
+            bool sentence_ended = (token_text.find('.') != std::string::npos ||
+                                   token_text.find('!') != std::string::npos ||
+                                   token_text.find('?') != std::string::npos);
 
-            // Send chunk every 3 words OR at sentence end
-            if (instance->word_count >= 3 || sentence_ended) {
+            // Fallback: for languages without spaces, flush when the buffer is long enough
+            bool long_enough = (instance->token_buffer.size() >= 32);
+
+            // Flush every ~3 words, or on sentence end, or when buffer is long
+            constexpr size_t MAX_BYTES = 96; // latency safety valve
+            if (instance->word_count  >= 3 || sentence_ended || instance->token_buffer.size() >= MAX_BYTES) {
                 instance->async_callback(instance->token_buffer);
-                
+
                 // Reset current chunk for next call
                 instance->token_buffer.clear();
-                instance->word_count = 0;
+                // Only reset in_word if we flushed on a real boundary or sentence end.
+                // If we flushed due to MAX_BYTES mid-word, keep in_word = true.
+                if (sentence_ended) {
+                    instance->in_word = false;
+                }
+                instance->word_count  = 0;
             }
         }
     }
     else if (state == RKLLM_RUN_FINISH) {
-        // Generation finished, clear the buffer
-        instance->token_buffer.clear();
+        // Emit any remaining buffered text
+        if (instance->async_callback && !instance->token_buffer.empty()) {
+            instance->async_callback(instance->token_buffer);
+            instance->token_buffer.clear();
+        }
+        instance->word_count  = 0;
+        instance->in_word = false;
         std::cout << "Generation finished" << std::endl;
     }
     else if (state == RKLLM_RUN_ERROR) {

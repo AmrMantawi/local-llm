@@ -43,6 +43,7 @@ private:
     std::function<void(const std::string&)> async_callback;
     std::string token_buffer;  // Buffer to accumulate tokens for chunking
     int word_count = 0;  // Counter for words in current chunk
+    bool in_word = false; // Tracks if we're currently inside a word across callbacks
     
     // Internal callback function for RKNN LLM
     static int rknn_callback(RKLLMResult* result, void* userdata, LLMCallState state);
