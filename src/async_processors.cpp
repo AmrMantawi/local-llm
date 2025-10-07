@@ -173,9 +173,9 @@ bool LLMProcessor::initialize() {
     
     // Initialize LLM backend (consistent with TTSProcessor pattern)
     auto& config = ConfigManager::getInstance();
-    const std::string llama_model_path = config.getLLMModelPath();
+    const std::string llm_model_path = config.getLLMModelPath();
     
-    if (!llm_->init(llama_model_path)) {
+    if (!llm_->init(llm_model_path)) {
         std::cerr << "[LLMProcessor] Failed to initialize LLM backend" << std::endl;
         return false;
     }

@@ -140,14 +140,15 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 # stt, tts, and llm options
-option(USE_WHISPER   "Enable whisper.cpp for STT"   ON)
+option(USE_WHISPER   "Enable whisper.cpp for STT"   OFF)
 option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
-option(USE_LLAMA     "Enable llama.cpp for LLM"     ON)
-option(USE_PAROLI    "Enable Paroli for TTS"        ON)
+option(USE_LLAMA     "Enable llama.cpp for LLM"     OFF)
+option(USE_PAROLI    "Enable Paroli for TTS"        OFF)
 
 # Statistics and monitoring options
 option(ENABLE_STATS_LOGGING "Enable pipeline statistics logging and monitoring" OFF)
 
+find_package(PkgConfig REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(ALSA REQUIRED)
 
@@ -182,6 +183,25 @@ if(USE_LLAMA)
     list(APPEND SOURCES src/llm_llama.cpp)
     add_subdirectory(third_party/llama.cpp ${CMAKE_BINARY_DIR}/llama-build EXCLUDE_FROM_ALL)
     list(APPEND EXTRA_LIBS llama)
+elseif(USE_RKLLM)
+    # Link RKLLM from file system
+    set(RKLLM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rknn-llm/rkllm-runtime/Linux")
+    
+    # Add include directories
+    include_directories(${RKLLM_DIR}/librkllm_api/include)
+    
+    # Add library directory (architecture-specific)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+        link_directories(${RKLLM_DIR}/librkllm_api/aarch64)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "armhf")
+        link_directories(${RKLLM_DIR}/librkllm_api/armhf)
+    else()
+        message(FATAL_ERROR "Unsupported architecture for RKLLM: ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    
+    add_compile_definitions(LLM_BACKEND=RknnLLM)
+    add_definitions(-DUSE_RKLLM)
+    list(APPEND SOURCES src/llm_rknn.cpp)
 else()
     message(FATAL_ERROR "No LLM backend selected")
 endif()
@@ -216,6 +236,8 @@ target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${ALSA_INCLUDE
 target_link_libraries(local-llm PRIVATE ${EXTRA_LIBS} ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} pthread)
 if(USE_LLAMA)
     target_link_libraries(local-llm PRIVATE llama)
+elseif(USE_RKLLM)
+    target_link_libraries(local-llm PRIVATE rkllmrt)
 endif()
 if(USE_WHISPER)
     target_link_libraries(local-llm PRIVATE whisper)

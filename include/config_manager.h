@@ -75,7 +75,9 @@ public:
     }
     
     std::string getLLMModelPath() const {
-#ifdef USE_LLAMA
+#ifdef USE_RKLLM
+        return getModelPath("llm", "rkllm");
+#elif USE_LLAMA
         return getModelPath("llm", "llama");
 #else
         std::cerr << "Error: No LLM backend enabled at compile time" << std::endl;

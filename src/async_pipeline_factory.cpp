@@ -15,6 +15,10 @@
 #include "tts_paroli.h"
 #endif
 
+#ifdef USE_RKLLM
+#include "llm_rknn.h"
+#endif
+
 namespace async_pipeline {
 
 /**
@@ -41,12 +45,15 @@ public:
     }
     
     static std::unique_ptr<ILLM> create_llm_backend() {
-#ifdef USE_LLAMA
         // Create LLM backend without initializing (processor will handle init)
+#ifdef USE_RKLLM
+        auto llm = std::make_unique<RknnLLM>();
+        return llm;
+#elif USE_LLAMA
         auto llm = std::make_unique<LlamaLLM>();
         return llm;
 #else
-        std::cerr << "[PipelineFactory] Llama LLM backend not available (USE_LLAMA not defined)" << std::endl;
+        std::cerr << "[PipelineFactory] LLM backend not available (USE_LLAMA or USE_RKLLM not defined)" << std::endl;
         return nullptr;
 #endif
     }
