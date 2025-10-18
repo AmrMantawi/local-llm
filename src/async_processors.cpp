@@ -59,10 +59,8 @@ bool STTProcessor::initialize() {
     audio_ = new audio_async(buffer_ms_);
     bool audio_initialized = false;
     for (int attempt = 1; attempt <= 8; ++attempt) {
-        std::cout << "[STTProcessor] Audio init attempt " << attempt << "/8..." << std::endl;
         if (audio_->init(-1, sample_rate_)) {
             audio_initialized = true;
-            std::cout << "[STTProcessor] Audio initialization successful on attempt " << attempt << std::endl;
             break;
         }
         std::cerr << "[STTProcessor] Audio init attempt " << attempt << " failed, retrying in 500ms..." << std::endl;
@@ -154,9 +152,13 @@ void STTProcessor::process() {
                 } else {
 #ifdef ENABLE_STATS_LOGGING
                     auto n = stats_.messages_processed++;
-                    stats_.avg_processing_time = std::chrono::milliseconds(
-                        (stats_.avg_processing_time.count() * (n - 1) + audio_msg.age().count()) / n
-                    );
+                    auto msg_age = audio_msg.age().count();
+                    auto current_avg = stats_.avg_processing_time.count();
+                    if (msg_age >= 0 && n > 0) {
+                        stats_.avg_processing_time = std::chrono::milliseconds(
+                            (current_avg * (n - 1) + msg_age) / n
+                        );
+                    }
 #endif
                     std::cout << "[STTProcessor] → " << transcribed_text << std::endl;
                 }
@@ -262,9 +264,13 @@ void LLMProcessor::process() {
                 } else {
 #ifdef ENABLE_STATS_LOGGING
                     auto n = stats_.messages_processed++;
-                    stats_.avg_processing_time = std::chrono::milliseconds(
-                        (stats_.avg_processing_time.count() * (n - 1) + input_msg.age().count()) / n
-                    );
+                    auto msg_age = input_msg.age().count();
+                    auto current_avg = stats_.avg_processing_time.count();
+                    if (msg_age >= 0 && n > 0) {
+                        stats_.avg_processing_time = std::chrono::milliseconds(
+                            (current_avg * (n - 1) + msg_age) / n
+                        );
+                    }
 #endif
                     std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
                 }
@@ -368,13 +374,15 @@ void TTSProcessor::process() {
                 return;
             } else {
 #ifdef ENABLE_STATS_LOGGING
-                auto n = stats_.messages_processed++;
-                stats_.avg_processing_time = std::chrono::milliseconds(
-                    (stats_.avg_processing_time.count() * (n - 1) + text_msg.age().count()) / n
-                );
+                    auto n = stats_.messages_processed++;
+                    auto msg_age = input_msg.age().count();
+                    auto current_avg = stats_.avg_processing_time.count();
+                    if (msg_age >= 0 && n > 0) {
+                        stats_.avg_processing_time = std::chrono::milliseconds(
+                            (current_avg * (n - 1) + msg_age) / n
+                        );
+                    }
 #endif
-                std::cout << "[TTSProcessor] Queued audio chunk with " << audio_chunk.audio_data.size() 
-                          << " samples at " << audio_chunk.sample_rate << " Hz" << std::endl;
             }
         } else {
             std::cerr << "[TTSProcessor] Failed to speak: " << text_msg.text << std::endl;
