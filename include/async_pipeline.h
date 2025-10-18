@@ -438,15 +438,16 @@ protected:
     
 
 
-private:
-    std::string name_;
-    std::atomic<bool> running_;
-    std::thread thread_;
-    
+protected:
 #ifdef ENABLE_STATS_LOGGING
     mutable std::mutex stats_mutex_;
     Stats stats_;
 #endif
+
+private:
+    std::string name_;
+    std::atomic<bool> running_;
+    std::thread thread_;
     
     // Signal-based control system
     mutable std::mutex control_mutex_;
