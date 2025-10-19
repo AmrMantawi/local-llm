@@ -109,6 +109,40 @@ bool TTSParoli::speak(const std::string &text, async_pipeline::AudioChunkMessage
     }
 }
 
+bool TTSParoli::speakWithPhonemeTimings(const std::string &text, async_pipeline::AudioChunkMessage& audio_chunk, std::vector<PhonemeTimingInfo>& phoneme_timings) {
+    if (!synthesizer) {
+        std::cerr << "TTS not initialized" << std::endl;
+        return false;
+    }
+
+    if (text.empty()) {
+        return true;
+    }
+
+    try {
+        // Generate complete audio for the text with timing information
+        auto result = synthesizer->synthesizePcmWithTiming(text);
+        
+        if (result.audio.empty()) {
+            std::cerr << "Failed to generate audio for text: " << text << std::endl;
+            return false;
+        }
+        
+        // Copy phoneme timing information
+        phoneme_timings = result.phoneme_timings;
+        
+        // Write audio data to the provided AudioChunkMessage
+        audio_chunk.audio_data = std::move(result.audio);
+        audio_chunk.sample_rate = synthesizer->nativeSampleRate();
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "TTS synthesis error: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 void TTSParoli::shutdown() {
     if (!synthesizer) {
         return; // Already shut down

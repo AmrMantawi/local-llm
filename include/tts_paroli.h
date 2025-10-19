@@ -14,6 +14,7 @@ public:
     
     bool init() override;
     bool speak(const std::string &text, async_pipeline::AudioChunkMessage& audio_chunk) override;
+    bool speakWithPhonemeTimings(const std::string &text, async_pipeline::AudioChunkMessage& audio_chunk, std::vector<PhonemeTimingInfo>& phoneme_timings) override;
 
     // TODO: Add async speak with callback for streaming audio
 
