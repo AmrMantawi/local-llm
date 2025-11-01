@@ -3,7 +3,7 @@
 #include <string>
 #include <functional>
 
-/// Interface for Local Language Models (LLMs)
+/// Interface for Large Language Models (LLMs)
 class ILLM {
 public:
     virtual ~ILLM() = default;
