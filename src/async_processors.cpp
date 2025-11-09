@@ -1,4 +1,6 @@
 #include "async_processors.h"
+#include "config_manager.h"
+#include "common.h"
 #include <iostream>
 
 namespace async_pipeline {
@@ -253,7 +255,7 @@ void LLMProcessor::process() {
         // Generate response
         std::string response;
         bool success = llm_->generate_async(input_msg.text, response, 
-            [this](const std::string& text_chunk) {
+            [this, &input_msg](const std::string& text_chunk) {
                 // Create response message
                 TextMessage response_msg(text_chunk);
                 
@@ -328,6 +330,20 @@ bool TTSProcessor::initialize() {
         std::cerr << "[TTSProcessor] Failed to start AudioOutputProcessor" << std::endl;
         return false;
     }
+
+    // Setup Unix socket for face control
+    if (!setup_unix_socket()) {
+        std::cerr << "[TTSProcessor] Failed to setup Unix socket" << std::endl;
+        return false;
+    }
+    
+    // Setup shared memory for phoneme data
+    if (!setup_shared_memory()) {
+        std::cerr << "[TTSProcessor] Failed to setup shared memory" << std::endl;
+        return false;
+    }
+    
+    face_shown_ = false;
     
     std::cout << "[TTSProcessor] Initialized successfully with audio output processor" << std::endl;
     return true;
@@ -364,7 +380,18 @@ void TTSProcessor::process() {
         
         // Create AudioChunkMessage to receive the audio data
         AudioChunkMessage audio_chunk;
-        bool success = tts_->speak(text_msg.text, audio_chunk);
+        bool success = false;
+        if(face_shown_) {
+            std::vector<PhonemeTimingInfo> phoneme_timings;
+            success = tts_->speakWithPhonemeTimings(text_msg.text, audio_chunk, phoneme_timings);
+            
+            // Send phoneme data to shared memory if available
+            if (success && !phoneme_timings.empty()) {
+                send_phoneme_data(phoneme_timings);
+            }
+        } else {
+            success = tts_->speak(text_msg.text, audio_chunk);
+        }
         
         if (success && !audio_chunk.audio_data.empty()) {
             fade_and_trim_tail_ms(audio_chunk, 325, 120);
@@ -398,6 +425,12 @@ void TTSProcessor::process() {
 }
 
 void TTSProcessor::cleanup() {
+    // Cleanup Unix socket
+    cleanup_socket();
+    
+    // Cleanup shared memory
+    cleanup_shared_memory();
+    
     // Ensure audio playback is interrupted and the output queue is unblocked
     if (audio_output_processor_) {
         // Stop any ongoing ALSA playback and flush pending chunks
@@ -589,6 +622,203 @@ void AudioOutputProcessor::play_audio_chunk(const std::vector<int16_t>& chunk) {
         std::cerr << "[AudioOutputProcessor] ALSA write error: " << snd_strerror(written) << std::endl;
         break;
     }
+}
+
+// Unix socket and shared memory implementation for TTSProcessor
+
+bool TTSProcessor::setup_unix_socket() {
+    // Create Unix socket
+    socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (socket_fd_ < 0) {
+        std::cerr << "[TTSProcessor] Failed to create Unix socket: " << strerror(errno) << std::endl;
+        return false;
+    }
+    
+    // Remove existing socket file
+    unlink(socket_path_.c_str());
+    
+    // Setup socket address
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+    
+    // Bind socket
+    if (bind(socket_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        std::cerr << "[TTSProcessor] Failed to bind Unix socket: " << strerror(errno) << std::endl;
+        close(socket_fd_);
+        socket_fd_ = -1;
+        return false;
+    }
+    
+    // Listen for connections
+    if (listen(socket_fd_, 5) < 0) {
+        std::cerr << "[TTSProcessor] Failed to listen on Unix socket: " << strerror(errno) << std::endl;
+        close(socket_fd_);
+        socket_fd_ = -1;
+        return false;
+    }
+    
+    // Start socket server thread
+    socket_running_ = true;
+    socket_thread_ = std::thread(&TTSProcessor::socket_server_thread, this);
+    
+    std::cout << "[TTSProcessor] Unix socket setup successfully at " << socket_path_ << std::endl;
+    return true;
+}
+
+void TTSProcessor::socket_server_thread() {
+    while (socket_running_) {
+        struct sockaddr_un client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        // Accept connection with timeout
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(socket_fd_, &read_fds);
+        
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+        
+        int result = select(socket_fd_ + 1, &read_fds, nullptr, nullptr, &timeout);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            std::cerr << "[TTSProcessor] Socket select error: " << strerror(errno) << std::endl;
+            break;
+        }
+        
+        if (result == 0) continue; // Timeout
+        
+        int client_fd = accept(socket_fd_, (struct sockaddr*)&client_addr, &client_len);
+        if (client_fd < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            std::cerr << "[TTSProcessor] Socket accept error: " << strerror(errno) << std::endl;
+            continue;
+        }
+        
+        // Read command from client
+        char buffer[256];
+        ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+        if (bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+            std::string command(buffer);
+            command.erase(command.find_last_not_of(" \n\r\t") + 1); // Trim whitespace
+            handle_socket_command(command);
+        }
+        
+        close(client_fd);
+    }
+}
+
+void TTSProcessor::handle_socket_command(const std::string& command) {
+    if (command == "face_show") {
+        face_shown_ = true;
+        std::cout << "[TTSProcessor] Face display enabled via socket command" << std::endl;
+    } else if (command == "face_hide") {
+        face_shown_ = false;
+        std::cout << "[TTSProcessor] Face display disabled via socket command" << std::endl;
+    } else if (command == "face_toggle") {
+        face_shown_ = !face_shown_;
+        std::cout << "[TTSProcessor] Face display toggled to: " << (face_shown_ ? "enabled" : "disabled") << std::endl;
+    } else {
+        std::cout << "[TTSProcessor] Unknown socket command: " << command << std::endl;
+    }
+}
+
+void TTSProcessor::cleanup_socket() {
+    socket_running_ = false;
+    
+    if (socket_thread_.joinable()) {
+        socket_thread_.join();
+    }
+    
+    if (socket_fd_ >= 0) {
+        close(socket_fd_);
+        socket_fd_ = -1;
+    }
+    
+    unlink(socket_path_.c_str());
+}
+
+bool TTSProcessor::setup_shared_memory() {
+    // Create shared memory object with proper name format
+    std::string shm_name = "/" + shared_mem_path_;
+    shared_mem_fd_ = shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
+    if (shared_mem_fd_ < 0) {
+        std::cerr << "[TTSProcessor] Failed to create shared memory: " << strerror(errno) << std::endl;
+        return false;
+    }
+    
+    // Set size of shared memory
+    size_t mem_size = sizeof(PhonemeSharedQueue);
+    if (ftruncate(shared_mem_fd_, mem_size) < 0) {
+        std::cerr << "[TTSProcessor] Failed to set shared memory size: " << strerror(errno) << std::endl;
+        close(shared_mem_fd_);
+        shared_mem_fd_ = -1;
+        return false;
+    }
+    
+    // Map shared memory
+    shared_queue_ = static_cast<PhonemeSharedQueue*>(
+        mmap(nullptr, mem_size, PROT_READ | PROT_WRITE, MAP_SHARED, shared_mem_fd_, 0)
+    );
+    
+    if (shared_queue_ == MAP_FAILED) {
+        std::cerr << "[TTSProcessor] Failed to map shared memory: " << strerror(errno) << std::endl;
+        close(shared_mem_fd_);
+        shared_mem_fd_ = -1;
+        return false;
+    }
+    
+    // Initialize shared queue
+    new (shared_queue_) PhonemeSharedQueue();
+    
+    std::cout << "[TTSProcessor] Shared memory setup successfully" << std::endl;
+    return true;
+}
+
+void TTSProcessor::send_phoneme_data(const std::vector<PhonemeTimingInfo>& phonemes) {
+    if (!shared_queue_) return;
+    
+    auto current_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    
+    for (const auto& phoneme : phonemes) {
+        uint32_t write_idx = shared_queue_->header.write_index.load();
+        uint32_t next_idx = (write_idx + 1) % PhonemeQueueHeader::MAX_PHONEMES;
+        
+        // Check if queue is full (next write would overwrite read position)
+        if (next_idx == shared_queue_->header.read_index.load()) {
+            std::cerr << "[TTSProcessor] Phoneme queue is full, dropping phoneme" << std::endl;
+            break;
+        }
+        
+        // Write phoneme data
+        shared_queue_->phonemes[write_idx].phoneme_id = phoneme.phoneme_id;
+        shared_queue_->phonemes[write_idx].duration_seconds = phoneme.duration_seconds;
+        shared_queue_->phonemes[write_idx].timestamp_us = current_time;
+        
+        // Update write index
+        shared_queue_->header.write_index.store(next_idx);
+    }
+}
+
+void TTSProcessor::cleanup_shared_memory() {
+    if (shared_queue_) {
+        size_t mem_size = sizeof(PhonemeSharedQueue);
+        munmap(shared_queue_, mem_size);
+        shared_queue_ = nullptr;
+    }
+    
+    if (shared_mem_fd_ >= 0) {
+        close(shared_mem_fd_);
+        shared_mem_fd_ = -1;
+    }
+    
+    std::string shm_name = "/" + shared_mem_path_;
+    shm_unlink(shm_name.c_str());
 }
 
 } // namespace async_pipeline

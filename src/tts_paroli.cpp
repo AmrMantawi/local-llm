@@ -129,7 +129,14 @@ bool TTSParoli::speakWithPhonemeTimings(const std::string &text, async_pipeline:
         }
         
         // Copy phoneme timing information
-        phoneme_timings = result.phoneme_timings;
+        phoneme_timings.clear();
+        phoneme_timings.reserve(result.phoneme_timings.size());
+        for (const auto& piper_phoneme : result.phoneme_timings) {
+            PhonemeTimingInfo our_phoneme;
+            our_phoneme.phoneme_id = piper_phoneme.phoneme_id;
+            our_phoneme.duration_seconds = piper_phoneme.duration_seconds;
+            phoneme_timings.push_back(our_phoneme);
+        }
         
         // Write audio data to the provided AudioChunkMessage
         audio_chunk.audio_data = std::move(result.audio);
