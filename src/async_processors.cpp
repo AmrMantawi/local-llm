@@ -402,7 +402,7 @@ void TTSProcessor::process() {
             } else {
 #ifdef ENABLE_STATS_LOGGING
                     auto n = stats_.messages_processed++;
-                    auto msg_age = input_msg.age().count();
+                    auto msg_age = text_msg.age().count();
                     auto current_avg = stats_.avg_processing_time.count();
                     if (msg_age >= 0 && n > 0) {
                         stats_.avg_processing_time = std::chrono::milliseconds(
