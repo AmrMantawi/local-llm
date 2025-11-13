@@ -11,8 +11,8 @@ class WhisperSTT : public ISTT {
 public:
     WhisperSTT() = default;
 
-    /// Load the Whisper model from the given file.
-    bool init(const std::string &modelPath) override;
+    /// Initialize Whisper.
+    bool init() override;
 
     /// Transcribe a single audio buffer.
     bool transcribe(const std::vector<float> &pcmf32, std::string &outText) override;

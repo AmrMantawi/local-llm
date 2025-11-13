@@ -1,4 +1,5 @@
 #include "stt_whisper.h"
+#include "config_manager.h"
 
 #include <iostream>
 #include <chrono>
@@ -32,7 +33,16 @@ static std::string trim(const std::string & str) {
     return str.substr(start, end - start);
 }
 
-bool WhisperSTT::init(const std::string &modelPath) {
+bool WhisperSTT::init() {
+  // Get model path from config manager
+  auto& config = ConfigManager::getInstance();
+  const std::string modelPath = config.getNestedModelPath("stt", "whisper", "model");
+  
+  if(modelPath.empty()) {
+    std::cerr << "Whisper model not found" << std::endl;
+    return false;
+}
+  
   struct whisper_context_params cparams = whisper_context_default_params();
 
   cparams.use_gpu    = false; // use GPU acceleration
@@ -44,7 +54,7 @@ bool WhisperSTT::init(const std::string &modelPath) {
       return false;
   }
 
-  std::cout << "STT (Whisper) initialized\n";
+  std::cout << "STT (Whisper) initialized with model: " << modelPath << "\n";
   return true;
 }
 

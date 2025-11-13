@@ -43,15 +43,14 @@ bool STTProcessor::initialize() {
         return false;
     }
     
-    auto& config = ConfigManager::getInstance();
-    const std::string whisper_model_path = config.getSTTModelPath();
-    
-    if (!stt_->init(whisper_model_path)) {
+    // STT backend gets model path from ConfigManager
+    if (!stt_->init()) {
         std::cerr << "[STTProcessor] Failed to initialize STT backend" << std::endl;
         return false;
     }
     
     // Cache config values once during initialization
+    auto& config = ConfigManager::getInstance();
     sample_rate_ = config.getAudioSampleRate();
     buffer_ms_ = config.getAudioBufferMs();
     vad_threshold_ = config.getVadThreshold();
@@ -206,11 +205,8 @@ bool LLMProcessor::initialize() {
         return false;
     }
     
-    // Initialize LLM backend (consistent with TTSProcessor pattern)
-    auto& config = ConfigManager::getInstance();
-    const std::string llm_model_path = config.getLLMModelPath();
-    
-    if (!llm_->init(llm_model_path)) {
+    // LLM backend gets model path from ConfigManager
+    if (!llm_->init()) {
         std::cerr << "[LLMProcessor] Failed to initialize LLM backend" << std::endl;
         return false;
     }

@@ -8,10 +8,9 @@ class ILLM {
 public:
     virtual ~ILLM() = default;
 
-    /// Initialize the LLM with a given model path
-    /// @param modelPath Path to the model file
+    /// Initialize the LLM.
     /// @return true on success, false on failure
-    virtual bool init(const std::string &modelPath) = 0;
+    virtual bool init() = 0;
 
     /// Generate a response to the input prompt
     /// @param prompt Input text prompt

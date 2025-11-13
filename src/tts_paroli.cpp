@@ -18,10 +18,9 @@ bool TTSParoli::init() {
     auto& config = ConfigManager::getInstance();
     
     // Get model paths from config using generalized method
-    auto paroli_paths = config.getParoliModelPaths();
-    encoder_path = paroli_paths.encoder;
-    decoder_path = paroli_paths.decoder;
-    config_path = paroli_paths.config;
+    encoder_path = config.getNestedModelPath("tts", "paroli", "encoder");
+    decoder_path = config.getNestedModelPath("tts", "paroli", "decoder");
+    config_path = config.getNestedModelPath("tts", "paroli", "config");
 #ifdef ESPEAK_NG_DATA_DIR
     espeak_data_path = ESPEAK_NG_DATA_DIR;
     std::cout << "ESPEAK_NG_DATA_DIR defined as: " << ESPEAK_NG_DATA_DIR << std::endl;
@@ -29,24 +28,23 @@ bool TTSParoli::init() {
     std::cout << "ESPEAK_NG_DATA_DIR not defined" << std::endl;
 #endif
     
-    // Check if model files exist
-    if (!std::filesystem::exists(encoder_path)) {
-        std::cerr << "Paroli encoder model not found at: " << encoder_path << std::endl;
+    if(encoder_path.empty()) {
+        std::cerr << "Paroli encoder model not found" << std::endl;
+        return false;
+    }
+
+    if(decoder_path.empty()) {
+        std::cerr << "Paroli decoder model not found" << std::endl;
         return false;
     }
     
-    if (!std::filesystem::exists(decoder_path)) {
-        std::cerr << "Paroli decoder model not found at: " << decoder_path << std::endl;
+    if(config_path.empty()) {
+        std::cerr << "Paroli config file not found" << std::endl;
         return false;
     }
     
-    if (!std::filesystem::exists(config_path)) {
-        std::cerr << "Paroli config file not found at: " << config_path << std::endl;
-        return false;
-    }
-    
-    if (!std::filesystem::exists(espeak_data_path)) {
-        std::cerr << "Paroli espeak data not found at: " << espeak_data_path << std::endl;
+    if(espeak_data_path.empty()) {
+        std::cerr << "Paroli espeak data not found" << std::endl;
         return false;
     }
     

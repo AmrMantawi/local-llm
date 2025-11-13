@@ -29,10 +29,9 @@ public:
     static std::unique_ptr<ISTT> create_stt_backend() {
 #ifdef USE_WHISPER
         auto stt = std::make_unique<WhisperSTT>();
-        auto& config = ConfigManager::getInstance();
-        const std::string whisper_model_path = config.getSTTModelPath();
         
-        if (!stt->init(whisper_model_path)) {
+        // STT backend gets model path from ConfigManager
+        if (!stt->init()) {
             std::cerr << "[PipelineFactory] Failed to initialize Whisper STT backend" << std::endl;
             return nullptr;
         }

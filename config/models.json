@@ -2,33 +2,32 @@
   "models": {
     "stt": {
       "whisper": {
-        "path": "../third_party/whisper.cpp/models/ggml-base.en.bin",
-        "type": "whisper",
-        "description": "Whisper base English model for speech-to-text"
+        "model": {
+          "path": "../third_party/whisper.cpp/models/ggml-base.en.bin",
+          "description": "Whisper base English model for speech-to-text"
+        }
       }
-    },
+    },  
     "llm": {
       "llama": {
-        "path": "../models/llm/jan-nano-4b-Q3_K_M.gguf",
-        "type": "llama",
-        "description": "Jan Nano 4B quantized model for text generation"
+        "model": {
+          "path": "../models/llm/jan-nano-4b-Q3_K_M.gguf",
+          "description": "Jan Nano 4B quantized model for text generation"
+        }
       }
     },
     "tts": {
       "paroli": {
         "encoder": {
           "path": "../models/tts/encoder.onnx",
-          "type": "paroli",
           "description": "Paroli encoder model (ONNX)"
         },
         "decoder": {
           "path": "../models/tts/decoder.onnx",
-          "type": "paroli",
           "description": "Paroli decoder model (ONNX)"
         },
         "config": {
           "path": "../models/tts/config.json",
-          "type": "paroli",
           "description": "Paroli model configuration JSON"
         }
       }

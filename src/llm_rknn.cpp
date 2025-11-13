@@ -1,11 +1,21 @@
 #include "llm_rknn.h"
+#include "config_manager.h"
 
 #include <iostream>
 #include <string>
 #include <cstring>
 #include <cctype>
 
-bool RknnLLM::init(const std::string &modelPath) {
+bool RknnLLM::init() {
+    // Get model path from config manager
+    auto& config = ConfigManager::getInstance();
+    const std::string modelPath = config.getNestedModelPath("llm", "rkllm", "model");
+    
+    if(modelPath.empty()) {
+        std::cerr << "RKLLM model not found" << std::endl;
+        return false;
+    }
+    
     // Initialize RKNN LLM parameters with default values
     param = rkllm_createDefaultParam();
     

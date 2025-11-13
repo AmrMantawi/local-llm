@@ -5,9 +5,9 @@
 class ISTT {
 public:
   /// Initialize STT.
-  /// @param modelPath path to STT model.
+  /// Model path is automatically retrieved from ConfigManager.
   /// @return true on success, false on failure.
-  virtual bool init(const std::string &modelPath) = 0;
+  virtual bool init() = 0;
 
   /// Transcribe a single audio buffer.
   /// @param pcmf32 input audio.

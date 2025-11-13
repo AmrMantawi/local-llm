@@ -9,8 +9,8 @@
 /// RKNN-LLM-based LLM adapter for Rockchip NPU.
 class RknnLLM : public ILLM {
 public:
-    /// Initialize the LLM with a given model path
-    bool init(const std::string &modelPath) override;
+    /// Initialize RKLLM
+    bool init() override;
 
     /// Generate a response to the input prompt
     bool generate(const std::string &prompt, std::string &response) override;

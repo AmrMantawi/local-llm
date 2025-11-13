@@ -8,8 +8,8 @@
 /// llama.cpp-based LLM adapter.
 class LlamaLLM : public ILLM {
 public:
-    /// Initialize the LLM with a given model path
-    bool init(const std::string &modelPath) override;
+    /// Initialize LLAMA.
+    bool init() override;
 
     /// Generate a response to the input prompt
     bool generate(const std::string &prompt, std::string &response) override;

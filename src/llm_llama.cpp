@@ -1,4 +1,5 @@
 #include "llm_llama.h"
+#include "config_manager.h"
 #include "common-sdl.h"
 #include "common.h"
 
@@ -70,7 +71,16 @@ static std::vector<llama_token> llama_tokenize(struct llama_context * ctx, const
     return result;
 }
 
-bool LlamaLLM::init(const std::string &modelPath) {
+bool LlamaLLM::init() {
+    // Get model path from config manager
+    auto& config = ConfigManager::getInstance();
+    const std::string modelPath = config.getNestedModelPath("llm", "llama", "model");
+
+    if(modelPath.empty()) {
+        std::cerr << "Llama model not found" << std::endl;
+        return false;
+    }
+
     // Initialize llama backend
     llama_backend_init();
 
