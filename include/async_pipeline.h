@@ -45,48 +45,17 @@ struct MessageStats {
 struct TextMessage {
     std::string text;
     
-#ifdef ENABLE_STATS_LOGGING
-    MessageStats stats;
-    
-    // Convenience methods for stats access
-    std::chrono::milliseconds age() const { return stats.age(); }
-#endif
-    
-    TextMessage() {
-#ifdef ENABLE_STATS_LOGGING
-        stats = MessageStats();
-#endif
-    }
-    TextMessage(std::string txt)
-        : text(std::move(txt)) {
-#ifdef ENABLE_STATS_LOGGING
-        stats = MessageStats();
-#endif
-    }
+    TextMessage() = default;
+    TextMessage(std::string txt) : text(std::move(txt)) {}
 };
 
 struct AudioChunkMessage {
     std::vector<int16_t> audio_data;
     unsigned int sample_rate;
     
-#ifdef ENABLE_STATS_LOGGING
-    MessageStats stats;
-    
-    // Convenience methods for stats access
-    std::chrono::milliseconds age() const { return stats.age(); }
-#endif
-    
-    AudioChunkMessage() : sample_rate(22050) {
-#ifdef ENABLE_STATS_LOGGING
-        stats = MessageStats();
-#endif
-    }
+    AudioChunkMessage() : sample_rate(22050) {}
     AudioChunkMessage(std::vector<int16_t> audio, unsigned int rate = 22050)
-        : audio_data(std::move(audio)), sample_rate(rate) {
-#ifdef ENABLE_STATS_LOGGING
-        stats = MessageStats();
-#endif
-    }
+        : audio_data(std::move(audio)), sample_rate(rate) {}
 };
 
 /**
@@ -102,7 +71,7 @@ struct ControlMessage {
     };
     
     Type type;
-
+    
 #ifdef ENABLE_STATS_LOGGING
     MessageStats stats;
     
@@ -110,8 +79,7 @@ struct ControlMessage {
     std::chrono::milliseconds age() const { return stats.age(); }
 #endif
     
-    ControlMessage(Type t) 
-        : type(t) {
+    ControlMessage(Type t) : type(t) {
 #ifdef ENABLE_STATS_LOGGING
         stats = MessageStats();
 #endif
@@ -404,11 +372,15 @@ protected:
                     if (!handled) {
                         // Default control handling
                         if (control_msg.type == ControlMessage::SHUTDOWN) {
-# ifdef ENABLE_STATS_LOGGING
+#ifdef ENABLE_STATS_LOGGING
                             auto n = stats_.control_signals_received++;
-                            stats_.avg_control_response_time = std::chrono::milliseconds(
-                                (stats_.avg_control_response_time.count() * (n - 1) + control_msg.age().count()) / n
-                            );
+                            auto msg_age = control_msg.age().count();
+                            auto current_avg = stats_.avg_control_response_time.count();
+                            if (msg_age >= 0 && n > 0) {
+                                stats_.avg_control_response_time = std::chrono::milliseconds(
+                                    (current_avg * (n - 1) + msg_age) / n
+                                );
+                            }
 #endif
                             return; // Exit the run loop
                         }

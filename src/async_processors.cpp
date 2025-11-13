@@ -133,12 +133,15 @@ void STTProcessor::process() {
     );
     
     if (voice_detected) {
+#ifdef ENABLE_STATS_LOGGING
+        // Start timer for STT processing
+        auto start_time = std::chrono::steady_clock::now();
+#endif
+        
         // Capture full audio window
         audio_->get(vad_capture_ms_, audio);
         
         if (!audio.empty()) {
-            AudioChunkMessage audio_msg; // For stats
-            
             // Then transcribe the audio
             std::string transcribed_text;
             bool success = stt_->transcribe(audio, transcribed_text);
@@ -153,12 +156,15 @@ void STTProcessor::process() {
                     return;
                 } else {
 #ifdef ENABLE_STATS_LOGGING
+                    // Calculate processing time for this message
+                    auto end_time = std::chrono::steady_clock::now();
+                    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                    
                     auto n = stats_.messages_processed++;
-                    auto msg_age = audio_msg.age().count();
                     auto current_avg = stats_.avg_processing_time.count();
-                    if (msg_age >= 0 && n > 0) {
+                    if (elapsed_ms >= 0 && n > 0) {
                         stats_.avg_processing_time = std::chrono::milliseconds(
-                            (current_avg * (n - 1) + msg_age) / n
+                            (current_avg * (n - 1) + elapsed_ms) / n
                         );
                     }
 #endif
@@ -248,14 +254,50 @@ void LLMProcessor::process() {
     
     TextMessage input_msg;
     PopResult result = input_queue_.pop_blocking(input_msg);
-    
+
     if (result == PopResult::SUCCESS) {
         std::cout << "[LLMProcessor] Processing: " << input_msg.text << std::endl;
         
         // Generate response
         std::string response;
-        bool success = llm_->generate_async(input_msg.text, response, 
-            [this, &input_msg](const std::string& text_chunk) {
+        bool success;
+        
+#ifdef ENABLE_STATS_LOGGING
+        // Start timer for LLM processing
+        auto start_time = std::chrono::steady_clock::now();
+        bool first_message = true;
+        
+        success = llm_->generate_async(input_msg.text, response, 
+            [this, start_time, &first_message](const std::string& text_chunk) {
+                // Create response message
+                TextMessage response_msg(text_chunk);
+                
+                // Calculate processing time for this message
+                auto end_time = std::chrono::steady_clock::now();
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                
+                if(first_message) {
+                    auto n = stats_.messages_processed++;
+                    auto current_avg = stats_.avg_processing_time.count();
+                    if (elapsed_ms >= 0 && n > 0) {
+                        stats_.avg_processing_time = std::chrono::milliseconds(
+                            (current_avg * (n - 1) + elapsed_ms) / n
+                        );
+                    }
+                    first_message = false;
+                }
+
+                // Push to output queue with blocking push
+                if (!output_queue_.push_blocking(std::move(response_msg))) {
+                    // Queue was shut down, stop processing
+                    return;
+                } else {
+                    std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
+                }
+            });
+#else
+        success = llm_->generate_async(input_msg.text, response, 
+            [this](const std::string& text_chunk) {
                 // Create response message
                 TextMessage response_msg(text_chunk);
                 
@@ -264,19 +306,10 @@ void LLMProcessor::process() {
                     // Queue was shut down, stop processing
                     return;
                 } else {
-#ifdef ENABLE_STATS_LOGGING
-                    auto n = stats_.messages_processed++;
-                    auto msg_age = input_msg.age().count();
-                    auto current_avg = stats_.avg_processing_time.count();
-                    if (msg_age >= 0 && n > 0) {
-                        stats_.avg_processing_time = std::chrono::milliseconds(
-                            (current_avg * (n - 1) + msg_age) / n
-                        );
-                    }
-#endif
                     std::cout << "[LLMProcessor] → " << text_chunk << std::endl;
                 }
             });
+#endif
         
         if (!success) {
             std::cerr << "[LLMProcessor] Failed to generate response for: " << input_msg.text << std::endl;
@@ -375,6 +408,10 @@ void TTSProcessor::process() {
     PopResult result = input_queue_.pop_blocking(text_msg);
     
     if (result == PopResult::SUCCESS) {
+#ifdef ENABLE_STATS_LOGGING
+        // Start timer for TTS processing
+        auto start_time = std::chrono::steady_clock::now();
+#endif
         // Speak the chunk and get audio data
         std::cout << "[TTSProcessor] Speaking: " << text_msg.text << std::endl;
         
@@ -401,14 +438,17 @@ void TTSProcessor::process() {
                 return;
             } else {
 #ifdef ENABLE_STATS_LOGGING
-                    auto n = stats_.messages_processed++;
-                    auto msg_age = text_msg.age().count();
-                    auto current_avg = stats_.avg_processing_time.count();
-                    if (msg_age >= 0 && n > 0) {
-                        stats_.avg_processing_time = std::chrono::milliseconds(
-                            (current_avg * (n - 1) + msg_age) / n
-                        );
-                    }
+                // Calculate processing time for this message
+                auto end_time = std::chrono::steady_clock::now();
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                
+                auto n = stats_.messages_processed++;
+                auto current_avg = stats_.avg_processing_time.count();
+                if (elapsed_ms >= 0 && n > 0) {
+                    stats_.avg_processing_time = std::chrono::milliseconds(
+                        (current_avg * (n - 1) + elapsed_ms) / n
+                    );
+                }
 #endif
             }
         } else {
