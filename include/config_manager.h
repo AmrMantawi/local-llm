@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
+#include <stdexcept>
 
 class ConfigManager {
 public:
@@ -36,20 +37,6 @@ public:
         }
     }
     
-    std::string getModelPath(const std::string& category, const std::string& type) const {
-        try {
-            std::string pathFromConfig = config["models"][category][type]["path"].get<std::string>();
-            std::filesystem::path p(pathFromConfig);
-            if (p.is_relative() && !configDirectory_.empty()) {
-                p = std::filesystem::path(configDirectory_) / p;
-            }
-            return p.string();
-        } catch (const std::exception& e) {
-            std::cerr << "Error getting model path for " << category << "/" << type << ": " << e.what() << std::endl;
-            return "";
-        }
-    }
-    
     std::string getNestedModelPath(const std::string& category, const std::string& backend, const std::string& component) const {
         try {
             std::string pathFromConfig = config["models"][category][backend][component]["path"].get<std::string>();
@@ -57,65 +44,22 @@ public:
             if (p.is_relative() && !configDirectory_.empty()) {
                 p = std::filesystem::path(configDirectory_) / p;
             }
+            if (!std::filesystem::exists(p)) {
+                throw std::runtime_error("Model component not found at: " + p.string());
+            }
             return p.string();
         } catch (const std::exception& e) {
             std::cerr << "Error getting nested model path for " << category << "/" << backend << "/" << component << ": " << e.what() << std::endl;
-            return "";
+            throw;
         }
     }
     
-    // Generalized backend-aware model getters
-    std::string getSTTModelPath() const {
-#ifdef USE_WHISPER
-        return getModelPath("stt", "whisper");
-#else
-        std::cerr << "Error: No STT backend enabled at compile time" << std::endl;
-        return "";
-#endif
-    }
-    
-    std::string getLLMModelPath() const {
-#ifdef USE_RKLLM
-        return getModelPath("llm", "rkllm");
-#elif USE_LLAMA
-        return getModelPath("llm", "llama");
-#else
-        std::cerr << "Error: No LLM backend enabled at compile time" << std::endl;
-        return "";
-#endif
-    }
-    
-    std::string getTTSModelPath(const std::string& component = "") const {
-#ifdef USE_PAROLI
-        if (component.empty()) {
-            // Return encoder path as the primary model
-            return getNestedModelPath("tts", "paroli", "encoder");
-        } else {
-            return getNestedModelPath("tts", "paroli", component);
+    std::string getAudioDevice() const {
+        try {
+            return config["settings"]["audio"]["alsa_device"].get<std::string>();
+        } catch (const std::exception&) {
+            return "default";
         }
-#else
-        std::cerr << "Error: No TTS backend enabled at compile time" << std::endl;
-        return "";
-#endif
-    }
-    
-    // Get all Paroli TTS model paths (for backends that need multiple files)
-    struct ParoliPaths {
-        std::string encoder;
-        std::string decoder;
-        std::string config;
-    };
-    
-    ParoliPaths getParoliModelPaths() const {
-        ParoliPaths paths;
-#ifdef USE_PAROLI
-        paths.encoder = getNestedModelPath("tts", "paroli", "encoder");
-        paths.decoder = getNestedModelPath("tts", "paroli", "decoder");
-        paths.config = getNestedModelPath("tts", "paroli", "config");
-#else
-        std::cerr << "Error: Paroli TTS backend not enabled at compile time" << std::endl;
-#endif
-        return paths;
     }
     
     int getAudioSampleRate() const {
