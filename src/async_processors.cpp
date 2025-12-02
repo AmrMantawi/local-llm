@@ -1,6 +1,5 @@
 #include "async_processors.h"
-#include "config_manager.h"
-#include "common.h"
+#include <cmath>
 #include <iostream>
 
 namespace async_pipeline {
@@ -32,9 +31,9 @@ inline void fade_and_trim_tail_ms(AudioChunkMessage& m, double fade_ms, double f
 
 // STTProcessor implementation
 STTProcessor::STTProcessor(SafeQueue<TextMessage>& output_queue, std::unique_ptr<ISTT> stt_backend)
-    : BaseProcessor("STTProcessor"), output_queue_(output_queue),
-      stt_(std::move(stt_backend)), audio_(nullptr),
-      is_in_speech_sequence_(false) {
+    : BaseProcessor("STTProcessor"),
+      output_queue_(output_queue),
+      stt_(std::move(stt_backend)) {
 }
 
 bool STTProcessor::initialize() {
@@ -43,38 +42,26 @@ bool STTProcessor::initialize() {
         return false;
     }
     
-    // STT backend gets model path from ConfigManager
     if (!stt_->init()) {
         std::cerr << "[STTProcessor] Failed to initialize STT backend" << std::endl;
         return false;
     }
-    
-    // Cache config values once during initialization
-    auto& config = ConfigManager::getInstance();
-    sample_rate_ = config.getAudioSampleRate();
-    buffer_ms_ = config.getAudioBufferMs();
-    vad_threshold_ = config.getVadThreshold();
-    vad_capture_ms_ = config.getVadCaptureMs();
-    
-    // Initialize audio capture
-    audio_ = new audio_async(buffer_ms_);
-    bool audio_initialized = false;
-    for (int attempt = 1; attempt <= 8; ++attempt) {
-        if (audio_->init(-1, sample_rate_)) {
-            audio_initialized = true;
-            break;
+
+    auto callback = [this](const std::string& text) {
+        if (text.empty()) {
+            return;
         }
-        std::cerr << "[STTProcessor] Audio init attempt " << attempt << " failed, retrying in 500ms..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    
-    if (!audio_initialized) {
-        std::cerr << "[STTProcessor] Failed to initialize audio capture after 8 attempts" << std::endl;
-        return false;
-    }
-    
-    if (!audio_->resume()) {
-        std::cerr << "[STTProcessor] Failed to start audio capture" << std::endl;
+
+        TextMessage text_msg(text);
+        if (!output_queue_.push_blocking(std::move(text_msg))) {
+            return;
+        }
+
+        std::cout << "[STTProcessor] → " << text << std::endl;
+    };
+
+    if (!stt_->start_streaming(callback)) {
+        std::cerr << "[STTProcessor] STT backend failed to start streaming audio" << std::endl;
         return false;
     }
     
@@ -96,92 +83,18 @@ bool STTProcessor::handle_control_message(const ControlMessage& msg) {
 }
 
 void STTProcessor::process() {
-    // Check if we should stop processing
     if (!is_running()) {
         return;
     }
-    
-    if (!audio_) {
-        std::cerr << "[STTProcessor] WARNING: audio_ is null!" << std::endl;
-        // Use interruptible sleep instead of fixed sleep
-        ControlMessage control_msg(ControlMessage::INTERRUPT);
-        wait_for_control_or_timeout(control_msg, std::chrono::milliseconds(100));
-        return;
-    }
-    
-    std::vector<float> audio;
-    
-    // Get recent audio for VAD analysis with interruptible sleep
-    audio_->get(vad_pre_window_ms_, audio);
-    
-    if (audio.empty()) {
-        // No audio available, use interruptible sleep
-        ControlMessage control_msg(ControlMessage::INTERRUPT);
-        wait_for_control_or_timeout(control_msg, std::chrono::milliseconds(50));
-        return;
-    }
-    
-    // Use cached config values (no repeated config access!)
-    bool voice_detected = ::vad_simple(
-        audio, 
-        sample_rate_, 
-        1250, // vad_start_ms
-        vad_threshold_, 
-        100.0f, // vad_freq_cutoff
-        false // vad_print_energy
-    );
-    
-    if (voice_detected) {
-#ifdef ENABLE_STATS_LOGGING
-        // Start timer for STT processing
-        auto start_time = std::chrono::steady_clock::now();
-#endif
-        
-        // Capture full audio window
-        audio_->get(vad_capture_ms_, audio);
-        
-        if (!audio.empty()) {
-            // Then transcribe the audio
-            std::string transcribed_text;
-            bool success = stt_->transcribe(audio, transcribed_text);
-            
-            if (success && !transcribed_text.empty()) {
-                // Create text message
-                TextMessage text_msg(transcribed_text);
-                
-                // Push to output queue with blocking push to handle queue full situations
-                if (!output_queue_.push_blocking(std::move(text_msg))) {
-                    // Queue was shut down, stop processing
-                    return;
-                } else {
-#ifdef ENABLE_STATS_LOGGING
-                    // Calculate processing time for this message
-                    auto end_time = std::chrono::steady_clock::now();
-                    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-                    
-                    auto n = stats_.messages_processed++;
-                    auto current_avg = stats_.avg_processing_time.count();
-                    if (elapsed_ms >= 0 && n > 0) {
-                        stats_.avg_processing_time = std::chrono::milliseconds(
-                            (current_avg * (n - 1) + elapsed_ms) / n
-                        );
-                    }
-#endif
-                    std::cout << "[STTProcessor] → " << transcribed_text << std::endl;
-                }
-            }
-            
-            // Clear audio buffer
-            audio_->clear();
-        }
-    }
+
+    ControlMessage control_msg(ControlMessage::INTERRUPT);
+    wait_for_control_or_timeout(control_msg, std::chrono::milliseconds(100));
 }
 
 void STTProcessor::cleanup() {
-    if (audio_) {
-        audio_->pause();
-        delete audio_;
-        audio_ = nullptr;
+    if (streaming_active_.load()) {
+        stt_->stop_streaming();
+        streaming_active_.store(false);
     }
     if (stt_) {
         stt_->shutdown();
