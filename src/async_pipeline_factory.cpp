@@ -7,6 +7,10 @@
 #include "stt_whisper.h"
 #endif
 
+#ifdef USE_SHERPA
+#include "stt_sherpa.h"
+#endif
+
 #ifdef USE_LLAMA
 #include "llm_llama.h"
 #endif
@@ -37,8 +41,15 @@ public:
         }
         
         return stt;
+#elif USE_SHERPA
+        auto stt = std::make_unique<SherpaSTT>();
+        if (!stt->init()) {
+            std::cerr << "[PipelineFactory] Failed to initialize Sherpa STT backend" << std::endl;
+            return nullptr;
+        }
+        return stt;
 #else
-        std::cerr << "[PipelineFactory] Whisper STT backend not available (USE_WHISPER not defined)" << std::endl;
+        std::cerr << "[PipelineFactory] STT backend not available (USE_WHISPER or USE_SHERPA not defined)" << std::endl;
         return nullptr;
 #endif
     }
