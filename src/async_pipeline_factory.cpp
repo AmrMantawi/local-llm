@@ -1,5 +1,4 @@
 #include "pipeline_manager.h"
-#include "config_manager.h"
 #include "async_pipeline_factory.h"
 
 // Backend includes
@@ -32,21 +31,10 @@ class PipelineFactoryImpl {
 public:
     static std::unique_ptr<ISTT> create_stt_backend() {
 #ifdef USE_WHISPER
-        auto stt = std::make_unique<WhisperSTT>();
-        
-        // STT backend gets model path from ConfigManager
-        if (!stt->init()) {
-            std::cerr << "[PipelineFactory] Failed to initialize Whisper STT backend" << std::endl;
-            return nullptr;
-        }
-        
+        auto stt = std::make_unique<WhisperSTT>();     
         return stt;
 #elif USE_SHERPA
         auto stt = std::make_unique<SherpaSTT>();
-        if (!stt->init()) {
-            std::cerr << "[PipelineFactory] Failed to initialize Sherpa STT backend" << std::endl;
-            return nullptr;
-        }
         return stt;
 #else
         std::cerr << "[PipelineFactory] STT backend not available (USE_WHISPER or USE_SHERPA not defined)" << std::endl;
