@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(local-llm LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Function to detect OS and architecture for dependency downloads
@@ -141,6 +141,7 @@ endif()
 
 # stt, tts, and llm options
 option(USE_WHISPER   "Enable whisper.cpp for STT"   OFF)
+option(USE_SHERPA    "Enable sherpa-onnx for STT"   OFF)
 option(USE_RKLLM     "Enable rkllm for LLM"         OFF)
 option(USE_LLAMA     "Enable llama.cpp for LLM"     OFF)
 option(USE_PAROLI    "Enable Paroli for TTS"        OFF)
@@ -156,7 +157,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 set(SOURCES
     src/main.cpp
-    src/common-sdl.cpp
     src/common.cpp
     src/async_pipeline_factory.cpp
     src/async_processors.cpp
@@ -170,9 +170,30 @@ endif()
 if(USE_WHISPER)
     add_compile_definitions(STT_BACKEND=WhisperSTT)
     add_definitions(-DUSE_WHISPER)
-    list(APPEND SOURCES src/stt_whisper.cpp)
+    list(APPEND SOURCES
+        src/common-sdl.cpp
+        src/common.cpp
+        src/stt_whisper.cpp
+    )
     add_subdirectory(third_party/whisper.cpp ${CMAKE_BINARY_DIR}/whisper-build EXCLUDE_FROM_ALL)
     list(APPEND EXTRA_LIBS whisper)
+elseif(USE_SHERPA)
+    add_compile_definitions(STT_BACKEND=SherpaSTT)
+    add_definitions(-DUSE_SHERPA)
+
+    add_definitions(-DSHERPA_ONNX_ENABLE_ALSA)
+    list(APPEND SOURCES
+        src/stt_sherpa.cpp
+        third_party/sherpa-onnx/sherpa-onnx/csrc/alsa.cc
+    )
+
+    # Disable unused features
+    set(SHERPA_ONNX_ENABLE_TTS OFF CACHE BOOL "Disable sherpa-onnx TTS (handled by Paroli)" FORCE)
+    set(SHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION OFF CACHE BOOL "Disable sherpa-onnx speaker diarization (unused)" FORCE)
+    
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/sherpa-onnx)
+    add_subdirectory(third_party/sherpa-onnx ${CMAKE_BINARY_DIR}/sherpa-onnx-build EXCLUDE_FROM_ALL)
+    list(APPEND EXTRA_LIBS sherpa-onnx-cxx-api)
 else()
     message(FATAL_ERROR "No STT backend selected")
 endif()
@@ -216,6 +237,8 @@ if(USE_PAROLI)
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/paroli-daemon/cmake")
 
     add_subdirectory(third_party/paroli-daemon ${CMAKE_BINARY_DIR}/paroli-build EXCLUDE_FROM_ALL)
+
+    link_directories(${CMAKE_BINARY_DIR}/_deps/espeak_ng-build)
     list(APPEND EXTRA_LIBS paroli-daemon-lib)
 
     # Add include directories for paroli-daemon
@@ -232,8 +255,13 @@ endif()
 
 # Link libraries and directories
 add_executable(local-llm ${SOURCES})
+set_property(TARGET local-llm PROPERTY CXX_STANDARD 20)
+
 target_include_directories(local-llm PRIVATE ${SDL2_INCLUDE_DIRS} ${ALSA_INCLUDE_DIRS} ${nlohmann_json_INCLUDE_DIRS})
 target_link_libraries(local-llm PRIVATE ${EXTRA_LIBS} ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} pthread)
+target_link_directories(local-llm PRIVATE
+    ${CMAKE_BINARY_DIR}/lib
+)
 if(USE_LLAMA)
     target_link_libraries(local-llm PRIVATE llama)
 elseif(USE_RKLLM)
@@ -241,6 +269,9 @@ elseif(USE_RKLLM)
 endif()
 if(USE_WHISPER)
     target_link_libraries(local-llm PRIVATE whisper)
+endif()
+if(USE_SHERPA)
+    target_link_libraries(local-llm PRIVATE sherpa-onnx-cxx-api)
 endif()
 if(USE_PAROLI)
     target_include_directories(local-llm PRIVATE

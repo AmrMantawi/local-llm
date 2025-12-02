@@ -1,4 +1,6 @@
 #include "stt_whisper.h"
+
+#include "common.h"
 #include "config_manager.h"
 
 #include <iostream>
@@ -54,11 +56,128 @@ bool WhisperSTT::init() {
       return false;
   }
 
+  sample_rate_ = config.getAudioSampleRate();
+  buffer_ms_ = config.getAudioBufferMs();
+  vad_threshold_ = config.getVadThreshold();
+  vad_capture_ms_ = config.getVadCaptureMs();
+
+  if (!init_audio()) {
+      whisper_free(ctx);
+      ctx = nullptr;
+      return false;
+  }
+
   std::cout << "STT (Whisper) initialized with model: " << modelPath << "\n";
   return true;
 }
 
-bool WhisperSTT::transcribe(const std::vector<float> &pcmf32, std::string &outText) {
+bool WhisperSTT::init_audio() {
+    audio_ = std::make_unique<audio_async>(buffer_ms_);
+    bool audio_initialized = false;
+    for (int attempt = 1; attempt <= 8; ++attempt) {
+        if (audio_->init(-1, sample_rate_)) {
+            audio_initialized = true;
+            break;
+        }
+        std::cerr << "[WhisperSTT] Audio init attempt " << attempt << " failed, retrying in 500ms..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    if (!audio_initialized) {
+        std::cerr << "[WhisperSTT] Failed to initialize audio capture after 8 attempts" << std::endl;
+        audio_.reset();
+        return false;
+    }
+
+    if (!audio_->resume()) {
+        std::cerr << "[WhisperSTT] Failed to start audio capture" << std::endl;
+        audio_.reset();
+        return false;
+    }
+
+    return true;
+}
+
+bool WhisperSTT::start_streaming(ResultCallback callback) {
+    if (!callback) {
+        std::cerr << "[WhisperSTT] Streaming callback is empty" << std::endl;
+        return false;
+    }
+
+    if (streaming_) {
+        std::cerr << "[WhisperSTT] Streaming already in progress" << std::endl;
+        return false;
+    }
+
+    if (!audio_ && !init_audio()) {
+        return false;
+    }
+
+    callback_ = std::move(callback);
+    stop_streaming_ = false;
+    streaming_thread_ = std::thread(&WhisperSTT::streaming_loop, this);
+    streaming_ = true;
+    return true;
+}
+
+void WhisperSTT::stop_streaming() {
+    if (!streaming_) {
+        return;
+    }
+
+    stop_streaming_ = true;
+    if (streaming_thread_.joinable()) {
+        streaming_thread_.join();
+    }
+    streaming_ = false;
+    stop_streaming_ = false;
+    callback_ = nullptr;
+}
+
+void WhisperSTT::streaming_loop() {
+    std::vector<float> audio_window;
+
+    while (!stop_streaming_) {
+        if (!audio_) {
+            break;
+        }
+
+        audio_->get(vad_pre_window_ms_, audio_window);
+
+        if (audio_window.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
+        bool voice_detected = ::vad_simple(
+            audio_window,
+            sample_rate_,
+            vad_start_ms_,
+            vad_threshold_,
+            100.0f,
+            false
+        );
+
+        if (!voice_detected) {
+            continue;
+        }
+
+        audio_->get(vad_capture_ms_, audio_window);
+        if (audio_window.empty()) {
+            continue;
+        }
+
+        std::string text;
+        if (transcribe_buffer(audio_window, text) && !text.empty() && callback_) {
+            callback_(text);
+            std::cout << "[WhisperSTT] → " << text << std::endl;
+        }
+
+        audio_->clear();
+    }
+}
+
+bool WhisperSTT::transcribe_buffer(const std::vector<float> &pcmf32, std::string &outText) {
   // const auto t_start = std::chrono::high_resolution_clock::now();
   // prob = 0.0f;
   // t_ms = 0;
@@ -133,6 +252,11 @@ bool WhisperSTT::transcribe(const std::vector<float> &pcmf32, std::string &outTe
 }
 
 void WhisperSTT::shutdown() {
+  stop_streaming();
+  if (audio_) {
+      audio_->pause();
+      audio_.reset();
+  }
   whisper_free(ctx);
   ctx = nullptr;
 }

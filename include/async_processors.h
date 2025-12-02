@@ -53,20 +53,7 @@ protected:
 private:
     SafeQueue<TextMessage>& output_queue_;
     std::unique_ptr<ISTT> stt_;
-    audio_async* audio_;
-    
-    // Cached config values
-    int sample_rate_;
-    int buffer_ms_;
-    float vad_threshold_;
-    int vad_capture_ms_;
-    
-    static const int vad_pre_window_ms_ = 2000;
-    static const int vad_post_window_ms_ = 2000;
-    
-    bool is_in_speech_sequence_ = false;
-    std::chrono::steady_clock::time_point speech_start_time_;
-    std::vector<float> buffered_audio_;
+    std::atomic<bool> streaming_active_{false};
 };
 
 /**
