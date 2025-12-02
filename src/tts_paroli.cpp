@@ -151,9 +151,6 @@ bool TTSParoli::speakWithPhonemeTimings(const std::string &text, async_pipeline:
 void TTSParoli::shutdown() {
     if (!synthesizer) {
         return; // Already shut down
-    }
-    
-    // Nothing to interrupt since synthesis is synchronous
-    
+    }    
     synthesizer.reset();
 }
