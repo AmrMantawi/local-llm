@@ -18,8 +18,16 @@ bool RknnLLM::init() {
     
     // Initialize RKNN LLM parameters with default values
     param = rkllm_createDefaultParam();
+    RKLLMExtendParam extend_param;
+
+    extend_param.base_domain_id = 0;
+    extend_param.embed_flash = 0;
+    // extend_param.enabled_cpus_num = 0;
+    // extend_param.enabled_cpus_mask = 0;
+    extend_param.n_batch = 1;
+    extend_param.use_cross_attn = 0;
+    extend_param.reserved = {0};
     
-    // Set model path
     param.model_path = modelPath.c_str();
     param.max_context_len = max_context_len;
     param.max_new_tokens = max_new_tokens;
@@ -28,6 +36,7 @@ bool RknnLLM::init() {
     param.temperature = 0.30f;
     param.skip_special_token = true;
     param.is_async = false; // handled manually
+    param.extend_param = extend_param;
     
     // Initialize the RKNN LLM handle
     int ret = rkllm_init(&handle, &param, rknn_callback);
