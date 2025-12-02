@@ -96,6 +96,9 @@ bool SherpaSTT::init() {
         sample_rate_ = 16000;
     }
 
+    // Select ALSA device from config (falls back to "default" internally)
+    const std::string audio_device = config.getAudioDevice();
+
     if (vadPath.empty()) {
         std::cerr << "[SherpaSTT] Sherpa VAD model not found" << std::endl;
         return false;
@@ -131,12 +134,14 @@ bool SherpaSTT::init() {
     // ALSA always provides audio at its own native rate; internal resampling is
     // handled by the sherpa_onnx::Alsa class.
     try {
-        alsa_ = std::make_unique<Alsa>("default");
+        alsa_ = std::make_unique<Alsa>(audio_device.c_str());
     } catch (const std::exception &e) {
-        std::cerr << "[SherpaSTT] Failed to initialize ALSA: " << e.what() << std::endl;
+        std::cerr << "[SherpaSTT] Failed to initialize ALSA device '" << audio_device
+                  << "': " << e.what() << std::endl;
         return false;
     } catch (...) {
-        std::cerr << "[SherpaSTT] Failed to initialize ALSA (unknown error)" << std::endl;
+        std::cerr << "[SherpaSTT] Failed to initialize ALSA device '" << audio_device
+                  << "' (unknown error)" << std::endl;
         return false;
     }
 

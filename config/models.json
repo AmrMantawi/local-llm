@@ -35,6 +35,7 @@
   },
   "settings": {
     "audio": {
+      "alsa_device": "default",
       "sample_rate": 16000,
       "buffer_ms": 30000,
       "vad_threshold": 0.6,
