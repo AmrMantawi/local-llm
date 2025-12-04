@@ -181,10 +181,13 @@ elseif(USE_SHERPA)
     add_compile_definitions(STT_BACKEND=SherpaSTT)
     add_definitions(-DUSE_SHERPA)
 
+    pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
+    include_directories(${PORTAUDIO_INCLUDE_DIRS})
+
     add_definitions(-DSHERPA_ONNX_ENABLE_ALSA)
     list(APPEND SOURCES
         src/stt_sherpa.cpp
-        third_party/sherpa-onnx/sherpa-onnx/csrc/alsa.cc
+        third_party/sherpa-onnx/sherpa-onnx/csrc/microphone.cc
     )
 
     # Disable unused features
@@ -193,7 +196,7 @@ elseif(USE_SHERPA)
     
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/sherpa-onnx)
     add_subdirectory(third_party/sherpa-onnx ${CMAKE_BINARY_DIR}/sherpa-onnx-build EXCLUDE_FROM_ALL)
-    list(APPEND EXTRA_LIBS sherpa-onnx-cxx-api)
+    list(APPEND EXTRA_LIBS sherpa-onnx-cxx-api ${PORTAUDIO_LIBRARIES})
 else()
     message(FATAL_ERROR "No STT backend selected")
 endif()
